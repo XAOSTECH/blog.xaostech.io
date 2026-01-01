@@ -1,0 +1,35 @@
+name = "xaostech-blog"
+compatibility_date = "2025-12-31"
+main = "src/index.ts"
+send_metrics = false
+
+[env.production]
+routes = [{ pattern = "blog.xaostech.io/*", zone_name = "xaostech.io" }]
+
+[env.production.vars]
+MAX_FILE_SIZE = "52428800"
+ADMIN_ROLE = "admin"
+FREE_TIER_LIMIT_GB = "5"
+CACHE_TTL = "3600"
+
+[[env.production.d1_databases]]
+binding = "DB"
+database_name = "blog-db"
+database_id = "${D1_BLOG_DB_ID}"
+
+[[env.production.r2_buckets]]
+binding = "BLOG_MEDIA"
+bucket_name = "blog-media"
+
+[[env.production.kv_namespaces]]
+binding = "CACHE"
+id = "${KV_CACHE_ID}"
+
+[env.testing]
+routes = [{ pattern = "blog.testing.local/*", zone_name = "localhost" }]
+
+[env.testing.vars]
+MAX_FILE_SIZE = "52428800"
+ADMIN_ROLE = "admin"
+FREE_TIER_LIMIT_GB = "5"
+CACHE_TTL = "3600"
