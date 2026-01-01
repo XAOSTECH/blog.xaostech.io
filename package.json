@@ -1,0 +1,19 @@
+{
+  "name": "xaostech-blog",
+  "version": "2.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy --env production",
+    "db:init": "wrangler d1 execute blog-db --file ./migrations/0001_init_schema.sql"
+  },
+  "dependencies": {
+    "hono": "latest",
+    "zod": "latest"
+  },
+  "devDependencies": {
+    "typescript": "latest",
+    "wrangler": "latest",
+    "typescript": "latest"
+  }
+}
