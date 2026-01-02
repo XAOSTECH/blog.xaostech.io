@@ -21,6 +21,10 @@ database_id = "${D1_BLOG_DB_ID}"
 binding = "BLOG_MEDIA"
 bucket_name = "blog-media"
 
+[[env.production.r2_buckets]]
+binding = "IMG"
+bucket_name = "img"
+
 [[env.production.kv_namespaces]]
 binding = "CACHE"
 id = "${KV_CACHE_ID}"
