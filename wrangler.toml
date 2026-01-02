@@ -4,6 +4,8 @@ main = "src/index.ts"
 send_metrics = false
 
 [env.production]
+name = "xaostech-blog"
+main = "src/index.ts"
 routes = [{ pattern = "blog.xaostech.io/*", zone_name = "xaostech.io" }]
 
 [env.production.vars]
@@ -16,10 +18,6 @@ CACHE_TTL = "3600"
 binding = "DB"
 database_name = "blog-db"
 database_id = "${D1_BLOG_DB_ID}"
-
-[[env.production.r2_buckets]]
-binding = "BLOG_MEDIA"
-bucket_name = "blog-media"
 
 [[env.production.kv_namespaces]]
 binding = "CACHE"

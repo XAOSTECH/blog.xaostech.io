@@ -4,6 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev",
+    "build": "echo 'no build required for blog.xaostech.io'",
     "deploy": "wrangler deploy --env production",
     "db:init": "wrangler d1 execute blog-db --file ./migrations/0001_init_schema.sql"
   },

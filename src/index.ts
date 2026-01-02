@@ -4,12 +4,13 @@ import { z } from 'zod';
 // Types
 interface Env {
   DB: D1Database;
-  BLOG_MEDIA: R2Bucket;
   CACHE: KVNamespace;
   MAX_FILE_SIZE: string;
   ADMIN_ROLE: string;
   FREE_TIER_LIMIT_GB: string;
   CACHE_TTL: string;
+  CF_ACCESS_CLIENT_ID?: string;
+  CF_ACCESS_CLIENT_SECRET?: string;
 }
 
 interface User {
@@ -70,6 +71,38 @@ app.use('*', async (c, next) => {
 // ============ HEALTH CHECK ============
 app.get('/health', (c) => {
   return c.json({ status: 'ok', service: 'blog' });
+});
+
+// ============ FAVICON ============
+// Proxy favicon requests through api.xaostech.io with service tokens
+app.get('/favicon.ico', async (c: any) => {
+  try {
+    const clientId = c.env.CF_ACCESS_CLIENT_ID;
+    const clientSecret = c.env.CF_ACCESS_CLIENT_SECRET;
+    
+    const headers = new Headers();
+    if (clientId && clientSecret) {
+      headers.set('Cf-Access-Client-Id', clientId);
+      headers.set('Cf-Access-Client-Secret', clientSecret);
+    }
+    
+    const response = await fetch('https://api.xaostech.io/data/assets/XAOSTECH_LOGO.png', { headers });
+    if (!response.ok) {
+      return c.json({ error: 'Favicon not found' }, 404);
+    }
+    
+    const blob = await response.blob();
+    return new Response(blob, {
+      status: 200,
+      headers: {
+        'Content-Type': 'image/png',
+        'Cache-Control': 'public, max-age=604800'
+      }
+    });
+  } catch (err) {
+    console.error('Favicon fetch error:', err);
+    return c.json({ error: 'Failed to fetch favicon' }, 500);
+  }
 });
 
 // ============ BLOG POSTS ENDPOINTS ============
@@ -308,7 +341,7 @@ app.post('/walls/:id/comments', async (c) => {
 
 // ============ MEDIA UPLOAD ENDPOINT ============
 
-// POST /upload - Upload media to R2
+// POST /upload - Upload media (proxied through API worker to data worker)
 app.post('/upload', async (c) => {
   const user = c.get('user') as User | undefined;
   
@@ -319,8 +352,8 @@ app.post('/upload', async (c) => {
   try {
     const formData = await c.req.formData();
     const file = formData.get('file') as File;
-    const targetId = formData.get('target_id') as string; // post_id or comment_id
-    const targetType = formData.get('target_type') as string; // 'post' or 'comment'
+    const targetId = formData.get('target_id') as string;
+    const targetType = formData.get('target_type') as string;
 
     if (!file) {
       return c.json({ error: 'No file provided' }, 400);
@@ -331,7 +364,7 @@ app.post('/upload', async (c) => {
       return c.json({ error: 'File too large' }, 413);
     }
 
-    // Check quota
+    // Check quota before proxying
     const quota = await c.env.DB.prepare(
       'SELECT total_bytes_used FROM usage_quota WHERE user_id = ?'
     ).bind(user.id).first<{ total_bytes_used: number }>();
@@ -343,14 +376,33 @@ app.post('/upload', async (c) => {
       return c.json({ error: 'Quota exceeded' }, 429);
     }
 
-    // Upload to R2
-    const fileKey = `${user.id}/${Date.now()}-${file.name}`;
-    const buffer = await file.arrayBuffer();
-    
-    await c.env.BLOG_MEDIA.put(fileKey, buffer);
+    // Proxy upload to API worker → data worker
+    const uploadFormData = new FormData();
+    uploadFormData.append('file', file);
+    uploadFormData.append('userId', user.id);
+    uploadFormData.append('bucket', 'blog-media');
+    uploadFormData.append('targetId', targetId);
+    uploadFormData.append('targetType', targetType);
 
-    // Record metadata
-    const mediaId = crypto.randomUUID();
+    const response = await fetch('https://api.xaostech.io/api/blog-media/upload', {
+      method: 'POST',
+      headers: {
+        'X-User-ID': user.id,
+        'X-User-Role': user.role,
+        'X-User-Email': user.email,
+        'X-Account-ID': user.account_id,
+      },
+      body: uploadFormData,
+    });
+
+    if (!response.ok) {
+      return c.json({ error: 'Upload failed' }, response.status);
+    }
+
+    const result = await response.json();
+
+    // Record metadata locally
+    const mediaId = result.mediaId || crypto.randomUUID();
     const now = Math.floor(Date.now() / 1000);
     const fileType = file.type.startsWith('audio') ? 'audio' 
                    : file.type.startsWith('image') ? 'image' : 'video';
@@ -363,7 +415,7 @@ app.post('/upload', async (c) => {
       file.name,
       file.size,
       fileType,
-      fileKey,
+      result.r2_key,
       targetType === 'post' ? targetId : null,
       targetType === 'comment' ? targetId : null,
       user.id,
@@ -378,11 +430,9 @@ app.post('/upload', async (c) => {
        total_bytes_used = total_bytes_used + ?, total_files = total_files + 1`
     ).bind(user.id, file.size, now, file.size).run();
 
-    const mediaUrl = `https://blog-media.xaostech.io/${fileKey}`;
-
     return c.json({ 
       mediaId, 
-      url: mediaUrl,
+      url: result.url,
       file_type: fileType,
       file_size: file.size
     }, 201);
@@ -456,14 +506,14 @@ app.delete('/admin/comments/:id', async (c) => {
   return c.json({ deleted: true });
 });
 
-// ===== MEDIA STORAGE (Centralized in data.xaostech.io) =====
-// Blog worker delegates all media operations to data worker
-// Keeps blog focused on content; data worker handles R2 + quotas
-// See: data.xaostech.io/media/* endpoints
+// ===== MEDIA STORAGE (Centralized via API → Data Worker) =====
+// Blog worker delegates all media operations through api.xaostech.io
+// This keeps all API logic centralized and allows rate limiting/auth in API
+// See: api.xaostech.io/blog-media/* endpoints
 
-const DATA_WORKER_URL = 'https://data.xaostech.io';
+const API_WORKER_URL = 'https://api.xaostech.io';
 
-// GET /media/quota - Check user storage quota (proxied to data worker)
+// GET /media/quota - Check user storage quota (proxied via API to data worker)
 app.get('/media/quota', async (c) => {
   const user = c.get('user') as User | undefined;
   
@@ -472,7 +522,14 @@ app.get('/media/quota', async (c) => {
   }
 
   try {
-    const response = await fetch(`${DATA_WORKER_URL}/media/quota/${user.id}`);
+    const headers = new Headers();
+    const clientId = c.env.CF_ACCESS_CLIENT_ID;
+    const clientSecret = c.env.CF_ACCESS_CLIENT_SECRET;
+    if (clientId && clientSecret) {
+      headers.set('Cf-Access-Client-Id', clientId);
+      headers.set('Cf-Access-Client-Secret', clientSecret);
+    }
+    const response = await fetch(`${API_WORKER_URL}/data/blog-media/quota/${user.id}`, { headers });
     const data = await response.json();
     return c.json(data, response.status);
   } catch (err) {
@@ -481,7 +538,7 @@ app.get('/media/quota', async (c) => {
   }
 });
 
-// POST /media/upload - Upload image/audio (proxied to data worker)
+// POST /media/upload - Upload image/audio (proxied via API to data worker)
 app.post('/media/upload', async (c) => {
   const user = c.get('user') as User | undefined;
   
@@ -497,14 +554,23 @@ app.post('/media/upload', async (c) => {
       return c.json({ error: 'No file provided' }, 400);
     }
 
-    // Forward to data worker with user_id
+    // Forward to API worker with user_id
     const uploadFormData = new FormData();
     uploadFormData.append('file', file);
     uploadFormData.append('user_id', user.id);
 
-    const response = await fetch(`${DATA_WORKER_URL}/media/upload`, {
+    const headers = new Headers();
+    headers.set('X-User-ID', user.id);
+    const clientId = c.env.CF_ACCESS_CLIENT_ID;
+    const clientSecret = c.env.CF_ACCESS_CLIENT_SECRET;
+    if (clientId && clientSecret) {
+      headers.set('Cf-Access-Client-Id', clientId);
+      headers.set('Cf-Access-Client-Secret', clientSecret);
+    }
+    const response = await fetch(`${API_WORKER_URL}/data/blog-media/upload`, {
       method: 'POST',
-      body: uploadFormData
+      body: uploadFormData,
+      headers
     });
 
     const data = await response.json();
@@ -531,9 +597,18 @@ app.delete('/media/:key', async (c) => {
       return c.json({ error: 'Forbidden' }, 403);
     }
 
-    // Forward to data worker
-    const response = await fetch(`${DATA_WORKER_URL}/media/${encodeURIComponent(key)}`, {
-      method: 'DELETE'
+    // Forward to API worker
+    const headers = new Headers();
+    headers.set('X-User-ID', user.id);
+    const clientId = c.env.CF_ACCESS_CLIENT_ID;
+    const clientSecret = c.env.CF_ACCESS_CLIENT_SECRET;
+    if (clientId && clientSecret) {
+      headers.set('Cf-Access-Client-Id', clientId);
+      headers.set('Cf-Access-Client-Secret', clientSecret);
+    }
+    const response = await fetch(`${API_WORKER_URL}/data/blog-media/${encodeURIComponent(key)}`, {
+      method: 'DELETE',
+      headers
     });
 
     const data = await response.json();
@@ -544,7 +619,7 @@ app.delete('/media/:key', async (c) => {
   }
 });
 
-// GET /media/list - List user's uploaded files (proxied to data worker)
+// GET /media/list - List user's uploaded files (proxied via API to data worker)
 app.get('/media/list', async (c) => {
   const user = c.get('user') as User | undefined;
   
@@ -553,13 +628,44 @@ app.get('/media/list', async (c) => {
   }
 
   try {
-    const response = await fetch(`${DATA_WORKER_URL}/media/list/${user.id}`);
+    const headers = new Headers();
+    const clientId = c.env.CF_ACCESS_CLIENT_ID;
+    const clientSecret = c.env.CF_ACCESS_CLIENT_SECRET;
+    if (clientId && clientSecret) {
+      headers.set('Cf-Access-Client-Id', clientId);
+      headers.set('Cf-Access-Client-Secret', clientSecret);
+    }
+    const response = await fetch(`${API_WORKER_URL}/data/blog-media/list/${user.id}`, { headers });
     const data = await response.json();
     return c.json(data, response.status);
   } catch (e) {
     console.error('Media list error:', e);
     return c.json({ error: 'List failed' }, 500);
   }
+});
+
+// GET /favicon.ico - Serve favicon
+app.get('/favicon.ico', async (c) => {
+  const headers = new Headers();
+  const clientId = c.env.CF_ACCESS_CLIENT_ID;
+  const clientSecret = c.env.CF_ACCESS_CLIENT_SECRET;
+  if (clientId && clientSecret) {
+    headers.set('Cf-Access-Client-Id', clientId);
+    headers.set('Cf-Access-Client-Secret', clientSecret);
+  }
+  const response = await fetch('https://api.xaostech.io/data/assets/XAOSTECH_LOGO.png', { headers });
+  
+  if (!response.ok) {
+    return c.notFound();
+  }
+  
+  return new Response(response.body, {
+    status: response.status,
+    headers: new Headers({
+      'Content-Type': 'image/png',
+      'Cache-Control': 'public, max-age=86400',
+    }),
+  });
 });
 
 export default app;
