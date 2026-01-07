@@ -1,7 +1,13 @@
-import { Hono } from 'hono';
+/// <reference types="@cloudflare/workers-types" />
+import { Hono, type Context } from 'hono';
+import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { z } from 'zod';
-import { createApiProxyRoute } from '../shared/types/api-proxy-hono.ts';
-import { createRouteProxyRoute } from '../shared/types/route-proxy-hono.ts';
+import { createApiProxyRoute } from '../shared/types/api-proxy-hono';
+import { serveFaviconHono } from '../shared/types/favicon';
+import { applySecurityHeaders } from '../shared/types/security';
+
+// API Worker URL for cross-service calls
+const API_WORKER_URL = 'https://api.xaostech.io';
 
 // Types
 interface Env {
@@ -11,6 +17,10 @@ interface Env {
   ADMIN_ROLE: string;
   FREE_TIER_LIMIT_GB: string;
   CACHE_TTL: string;
+  // Auth token for API proxy
+  API_ACCESS_CLIENT_ID?: string;
+  API_ACCESS_CLIENT_SECRET?: string;
+  // Backwards compatibility
   CF_ACCESS_CLIENT_ID?: string;
   CF_ACCESS_CLIENT_SECRET?: string;
 }
@@ -21,6 +31,16 @@ interface User {
   role: string;
   account_id: string;
 }
+
+// Hono context variables
+type Variables = {
+  user: User | null;
+};
+
+// Helper to safely cast status codes for Hono's strict typing
+// Returns 500 for informational (1xx) and other non-contentful statuses
+const asStatus = (status: number): ContentfulStatusCode =>
+  (status >= 200 ? status : 500) as ContentfulStatusCode;
 
 // Validation schemas
 const PostSchema = z.object({
@@ -41,7 +61,14 @@ const WallSchema = z.object({
   description: z.string().max(500).optional(),
 });
 
-const app = new Hono<{ Bindings: Env }>();
+const app = new Hono<{ Bindings: Env; Variables: Variables }>();
+
+// Global security headers middleware
+app.use('*', async (c, next) => {
+  await next();
+  const res = c.res as Response;
+  return applySecurityHeaders(res);
+});
 
 // Middleware to get user from account worker
 app.use('*', async (c, next) => {
@@ -91,51 +118,18 @@ app.get('/debug/proxy-test', async (c: any) => {
 // === LOCAL ENV PRESENCE CHECK ===
 // Returns whether this worker has CF_ACCESS secrets available at runtime (no secret values returned)
 app.get('/debug/env', (c: any) => {
-  const cEnvHasClientId = !!(c.env && c.env.CF_ACCESS_CLIENT_ID);
-  const cEnvHasClientSecret = !!(c.env && c.env.CF_ACCESS_CLIENT_SECRET);
-  const processEnvHasClientId = !!process.env.CF_ACCESS_CLIENT_ID;
-  const processEnvHasClientSecret = !!process.env.CF_ACCESS_CLIENT_SECRET;
-  return c.json({ cEnvHasClientId, cEnvHasClientSecret, processEnvHasClientId, processEnvHasClientSecret });
+  const cEnvHasApiClientId = !!(c.env && c.env.API_ACCESS_CLIENT_ID);
+  const cEnvHasApiClientSecret = !!(c.env && c.env.API_ACCESS_CLIENT_SECRET);
+  return c.json({ cEnvHasApiClientId, cEnvHasApiClientSecret });
 });
 
 // ============ API PROXY ============
-// Routes /api/* requests to api.xaostech.io with CF_ACCESS authentication
+// Routes /api/* requests to api.xaostech.io with API_ACCESS authentication
 app.all('/api/*', createApiProxyRoute());
-
-// ============ ROUTE PROXIES ============
-// Proxy certain site prefixes to their subdomains (silent reverse proxy)
-app.all('/portfolio/*', createRouteProxyRoute());
-app.all('/portfolio', createRouteProxyRoute());
-app.all('/account/*', createRouteProxyRoute());
-app.all('/account', createRouteProxyRoute());
-app.all('/data/*', createRouteProxyRoute());
-app.all('/data', createRouteProxyRoute());
-app.all('/lingua/*', createRouteProxyRoute());
-app.all('/payments/*', createRouteProxyRoute());
 
 // ============ FAVICON ============
 // Favicon proxied through local /api/data/assets route
-app.get('/favicon.ico', async (c: any) => {
-  try {
-    // Request through local /api route which injects CF_ACCESS credentials
-    const response = await fetch('https://blog.xaostech.io/api/data/assets/XAOSTECH_LOGO.png');
-    if (!response.ok) {
-      return c.json({ error: 'Favicon not found' }, 404);
-    }
-    
-    const blob = await response.blob();
-    return new Response(blob, {
-      status: 200,
-      headers: {
-        'Content-Type': 'image/png',
-        'Cache-Control': 'public, max-age=604800'
-      }
-    });
-  } catch (err) {
-    console.error('Favicon fetch error:', err);
-    return c.json({ error: 'Failed to fetch favicon' }, 500);
-  }
-});
+app.get('/favicon.ico', serveFaviconHono);
 
 // ============ BLOG POSTS ENDPOINTS ============
 
@@ -428,7 +422,7 @@ app.post('/upload', async (c) => {
     });
 
     if (!response.ok) {
-      return c.json({ error: 'Upload failed' }, response.status);
+      return c.json({ error: 'Upload failed' }, asStatus(response.status));
     }
 
     const result = await response.json();
@@ -543,7 +537,7 @@ app.delete('/admin/comments/:id', async (c) => {
 // This keeps all API logic centralized and allows rate limiting/auth in API
 // See: api.xaostech.io/blog-media/* endpoints
 
-const API_WORKER_URL = 'https://api.xaostech.io';
+
 
 // GET /media/quota - Check user storage quota (proxied via API to data worker)
 app.get('/media/quota', async (c) => {
@@ -555,15 +549,15 @@ app.get('/media/quota', async (c) => {
 
   try {
     const headers = new Headers();
-    const clientId = c.env.CF_ACCESS_CLIENT_ID;
-    const clientSecret = c.env.CF_ACCESS_CLIENT_SECRET;
+    const clientId = c.env.API_ACCESS_CLIENT_ID;
+    const clientSecret = c.env.API_ACCESS_CLIENT_SECRET;
     if (clientId && clientSecret) {
       headers.set('CF-Access-Client-Id', clientId);
       headers.set('CF-Access-Client-Secret', clientSecret);
     }
     const response = await fetch(`${API_WORKER_URL}/data/blog-media/quota/${user.id}`, { headers });
     const data = await response.json();
-    return c.json(data, response.status);
+    return c.json(data, asStatus(response.status));
   } catch (err) {
     console.error('Quota fetch error:', err);
     return c.json({ error: 'Failed to fetch quota' }, 500);
@@ -593,20 +587,15 @@ app.post('/media/upload', async (c) => {
 
     const headers = new Headers();
     headers.set('X-User-ID', user.id);
-    const clientId = c.env.CF_ACCESS_CLIENT_ID;
-    const clientSecret = c.env.CF_ACCESS_CLIENT_SECRET;
-    if (clientId && clientSecret) {
-      headers.set('CF-Access-Client-Id', clientId);
-      headers.set('CF-Access-Client-Secret', clientSecret);
-    }
-    const response = await fetch(`${API_WORKER_URL}/data/blog-media/upload`, {
+    // POST to local API proxy so API_ACCESS_* headers are injected at runtime
+    const response = await fetch('/api/data/blog-media/upload', {
       method: 'POST',
       body: uploadFormData,
       headers
     });
 
     const data = await response.json();
-    return c.json(data, response.status);
+    return c.json(data, asStatus(response.status));
   } catch (e) {
     console.error('Media upload error:', e);
     return c.json({ error: 'Upload failed' }, 500);
@@ -629,22 +618,16 @@ app.delete('/media/:key', async (c) => {
       return c.json({ error: 'Forbidden' }, 403);
     }
 
-    // Forward to API worker
+    // Forward to API via local proxy so API_ACCESS_* headers are injected at runtime
     const headers = new Headers();
     headers.set('X-User-ID', user.id);
-    const clientId = c.env.CF_ACCESS_CLIENT_ID;
-    const clientSecret = c.env.CF_ACCESS_CLIENT_SECRET;
-    if (clientId && clientSecret) {
-      headers.set('CF-Access-Client-Id', clientId);
-      headers.set('CF-Access-Client-Secret', clientSecret);
-    }
-    const response = await fetch(`${API_WORKER_URL}/data/blog-media/${encodeURIComponent(key)}`, {
+    const response = await fetch(`/api/data/blog-media/${encodeURIComponent(key)}`, {
       method: 'DELETE',
       headers
     });
 
     const data = await response.json();
-    return c.json(data, response.status);
+    return c.json(data, asStatus(response.status));
   } catch (e) {
     console.error('Media delete error:', e);
     return c.json({ error: 'Delete failed' }, 500);
@@ -661,15 +644,10 @@ app.get('/media/list', async (c) => {
 
   try {
     const headers = new Headers();
-    const clientId = c.env.CF_ACCESS_CLIENT_ID;
-    const clientSecret = c.env.CF_ACCESS_CLIENT_SECRET;
-    if (clientId && clientSecret) {
-      headers.set('CF-Access-Client-Id', clientId);
-      headers.set('CF-Access-Client-Secret', clientSecret);
-    }
-    const response = await fetch(`${API_WORKER_URL}/data/blog-media/list/${user.id}`, { headers });
+    // Call local API proxy so API_ACCESS_* headers are injected at runtime
+    const response = await fetch(`/api/data/blog-media/quota/${user.id}`, { headers });
     const data = await response.json();
-    return c.json(data, response.status);
+    return c.json(data, asStatus(response.status));
   } catch (e) {
     console.error('Media list error:', e);
     return c.json({ error: 'List failed' }, 500);
@@ -677,27 +655,93 @@ app.get('/media/list', async (c) => {
 });
 
 // GET /favicon.ico - Serve favicon
-app.get('/favicon.ico', async (c) => {
-  const headers = new Headers();
-  const clientId = c.env.CF_ACCESS_CLIENT_ID;
-  const clientSecret = c.env.CF_ACCESS_CLIENT_SECRET;
-  if (clientId && clientSecret) {
-    headers.set('CF-Access-Client-Id', clientId);
-    headers.set('CF-Access-Client-Secret', clientSecret);
+app.get('/favicon.ico', serveFaviconHono);
+
+// ============ LANDING PAGE ============
+app.get('/', async (c) => {
+  // Fetch recent posts
+  let posts: any[] = [];
+  try {
+    const result = await c.env.DB.prepare(
+      `SELECT p.id, p.title, p.slug, p.excerpt, p.featured_image_url, p.published_at, p.author_id,
+              u.username as author_name, u.avatar_url as author_avatar
+       FROM posts p
+       LEFT JOIN users u ON p.author_id = u.id
+       WHERE p.status = 'published'
+       ORDER BY p.published_at DESC
+       LIMIT 5`
+    ).all();
+    posts = result.results || [];
+  } catch (e) {
+    console.error('Failed to fetch posts:', e);
   }
-const response = await fetch('/api/data/assets/XAOSTECH_LOGO.png', { headers });
-  
-  if (!response.ok) {
-    return c.notFound();
-  }
-  
-  return new Response(response.body, {
-    status: response.status,
-    headers: new Headers({
-      'Content-Type': 'image/png',
-      'Cache-Control': 'public, max-age=86400',
-    }),
-  });
+
+  const postsHtml = posts.length > 0 ? posts.map((p: any) => `
+    <article class="post-card">
+      ${p.featured_image_url ? `<img src="${p.featured_image_url}" alt="${p.title}" class="post-image">` : ''}
+      <div class="post-content">
+        <h2><a href="/posts/${p.slug}">${p.title}</a></h2>
+        <p class="excerpt">${p.excerpt || ''}</p>
+        <div class="post-meta">
+          <div class="author">
+            <img src="${p.author_avatar || '/api/data/assets/XAOSTECH_LOGO.png'}" alt="${p.author_name || 'Author'}" class="author-avatar">
+            <span>${p.author_name || 'Unknown'}</span>
+          </div>
+          <time>${p.published_at ? new Date(p.published_at * 1000).toLocaleDateString() : ''}</time>
+        </div>
+      </div>
+    </article>
+  `).join('') : '<p class="no-posts">No posts yet. Check back soon!</p>';
+
+  const html = \`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>XAOSTECH Blog</title>
+  <link rel="icon" type="image/png" href="/api/data/assets/XAOSTECH_LOGO.png">
+  <style>
+    :root { --primary: #f6821f; --bg: #0a0a0a; --text: #e0e0e0; --card-bg: #1a1a1a; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; padding: 2rem; }
+    .container { max-width: 900px; margin: 0 auto; }
+    header { text-align: center; margin-bottom: 3rem; }
+    header h1 { color: var(--primary); font-size: 2.5rem; margin-bottom: 0.5rem; }
+    header p { opacity: 0.7; }
+    .posts { display: flex; flex-direction: column; gap: 2rem; }
+    .post-card { background: var(--card-bg); border-radius: 12px; overflow: hidden; display: flex; flex-direction: column; }
+    .post-image { width: 100%; height: 200px; object-fit: cover; }
+    .post-content { padding: 1.5rem; }
+    .post-content h2 { margin-bottom: 0.75rem; }
+    .post-content h2 a { color: var(--text); text-decoration: none; }
+    .post-content h2 a:hover { color: var(--primary); }
+    .excerpt { opacity: 0.8; margin-bottom: 1rem; line-height: 1.6; }
+    .post-meta { display: flex; justify-content: space-between; align-items: center; opacity: 0.6; font-size: 0.9rem; }
+    .author { display: flex; align-items: center; gap: 0.5rem; }
+    .author-avatar { width: 28px; height: 28px; border-radius: 50%; }
+    .no-posts { text-align: center; opacity: 0.6; padding: 3rem; }
+    footer { text-align: center; margin-top: 4rem; opacity: 0.5; font-size: 0.85rem; }
+    footer a { color: var(--primary); }
+    @media (min-width: 600px) {
+      .post-card { flex-direction: row; }
+      .post-image { width: 300px; height: auto; min-height: 180px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>📝 XAOSTECH Blog</h1>
+      <p>Thoughts, tutorials, and updates from the XAOSTECH team</p>
+    </header>
+    <section class="posts">
+      \${postsHtml}
+    </section>
+  </div>
+  <footer><a href="https://xaostech.io">← Back to XAOSTECH</a></footer>
+</body>
+</html>\`;
+  return c.html(html);
 });
 
 export default app;
