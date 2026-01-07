@@ -1,5 +1,7 @@
 import { Hono } from 'hono';
 import { z } from 'zod';
+import { createApiProxyRoute } from '../shared/types/api-proxy-hono.ts';
+import { createRouteProxyRoute } from '../shared/types/route-proxy-hono.ts';
 
 // Types
 interface Env {
@@ -73,20 +75,50 @@ app.get('/health', (c) => {
   return c.json({ status: 'ok', service: 'blog' });
 });
 
+// === PROXY DEBUG TEST ===
+app.get('/debug/proxy-test', async (c: any) => {
+  try {
+    const url = new URL('/api/debug/headers', c.req.url);
+    const resp = await fetch(url.toString(), { method: 'GET' });
+    const json = await resp.json();
+    return c.json({ proxied: json });
+  } catch (err: any) {
+    console.error('Proxy test error:', err);
+    return c.json({ error: 'Proxy test failed' }, 500);
+  }
+});
+
+// === LOCAL ENV PRESENCE CHECK ===
+// Returns whether this worker has CF_ACCESS secrets available at runtime (no secret values returned)
+app.get('/debug/env', (c: any) => {
+  const cEnvHasClientId = !!(c.env && c.env.CF_ACCESS_CLIENT_ID);
+  const cEnvHasClientSecret = !!(c.env && c.env.CF_ACCESS_CLIENT_SECRET);
+  const processEnvHasClientId = !!process.env.CF_ACCESS_CLIENT_ID;
+  const processEnvHasClientSecret = !!process.env.CF_ACCESS_CLIENT_SECRET;
+  return c.json({ cEnvHasClientId, cEnvHasClientSecret, processEnvHasClientId, processEnvHasClientSecret });
+});
+
+// ============ API PROXY ============
+// Routes /api/* requests to api.xaostech.io with CF_ACCESS authentication
+app.all('/api/*', createApiProxyRoute());
+
+// ============ ROUTE PROXIES ============
+// Proxy certain site prefixes to their subdomains (silent reverse proxy)
+app.all('/portfolio/*', createRouteProxyRoute());
+app.all('/portfolio', createRouteProxyRoute());
+app.all('/account/*', createRouteProxyRoute());
+app.all('/account', createRouteProxyRoute());
+app.all('/data/*', createRouteProxyRoute());
+app.all('/data', createRouteProxyRoute());
+app.all('/lingua/*', createRouteProxyRoute());
+app.all('/payments/*', createRouteProxyRoute());
+
 // ============ FAVICON ============
-// Proxy favicon requests through api.xaostech.io with service tokens
+// Favicon proxied through local /api/data/assets route
 app.get('/favicon.ico', async (c: any) => {
   try {
-    const clientId = c.env.CF_ACCESS_CLIENT_ID;
-    const clientSecret = c.env.CF_ACCESS_CLIENT_SECRET;
-    
-    const headers = new Headers();
-    if (clientId && clientSecret) {
-      headers.set('Cf-Access-Client-Id', clientId);
-      headers.set('Cf-Access-Client-Secret', clientSecret);
-    }
-    
-    const response = await fetch('https://api.xaostech.io/data/assets/XAOSTECH_LOGO.png', { headers });
+    // Request through local /api route which injects CF_ACCESS credentials
+    const response = await fetch('https://blog.xaostech.io/api/data/assets/XAOSTECH_LOGO.png');
     if (!response.ok) {
       return c.json({ error: 'Favicon not found' }, 404);
     }
@@ -376,7 +408,7 @@ app.post('/upload', async (c) => {
       return c.json({ error: 'Quota exceeded' }, 429);
     }
 
-    // Proxy upload to API worker → data worker
+    // Proxy upload to local /api/data/blog-media which routes through API worker to data worker
     const uploadFormData = new FormData();
     uploadFormData.append('file', file);
     uploadFormData.append('userId', user.id);
@@ -384,7 +416,7 @@ app.post('/upload', async (c) => {
     uploadFormData.append('targetId', targetId);
     uploadFormData.append('targetType', targetType);
 
-    const response = await fetch('https://api.xaostech.io/api/blog-media/upload', {
+    const response = await fetch('/api/data/blog-media/upload', {
       method: 'POST',
       headers: {
         'X-User-ID': user.id,
@@ -526,8 +558,8 @@ app.get('/media/quota', async (c) => {
     const clientId = c.env.CF_ACCESS_CLIENT_ID;
     const clientSecret = c.env.CF_ACCESS_CLIENT_SECRET;
     if (clientId && clientSecret) {
-      headers.set('Cf-Access-Client-Id', clientId);
-      headers.set('Cf-Access-Client-Secret', clientSecret);
+      headers.set('CF-Access-Client-Id', clientId);
+      headers.set('CF-Access-Client-Secret', clientSecret);
     }
     const response = await fetch(`${API_WORKER_URL}/data/blog-media/quota/${user.id}`, { headers });
     const data = await response.json();
@@ -564,8 +596,8 @@ app.post('/media/upload', async (c) => {
     const clientId = c.env.CF_ACCESS_CLIENT_ID;
     const clientSecret = c.env.CF_ACCESS_CLIENT_SECRET;
     if (clientId && clientSecret) {
-      headers.set('Cf-Access-Client-Id', clientId);
-      headers.set('Cf-Access-Client-Secret', clientSecret);
+      headers.set('CF-Access-Client-Id', clientId);
+      headers.set('CF-Access-Client-Secret', clientSecret);
     }
     const response = await fetch(`${API_WORKER_URL}/data/blog-media/upload`, {
       method: 'POST',
@@ -603,8 +635,8 @@ app.delete('/media/:key', async (c) => {
     const clientId = c.env.CF_ACCESS_CLIENT_ID;
     const clientSecret = c.env.CF_ACCESS_CLIENT_SECRET;
     if (clientId && clientSecret) {
-      headers.set('Cf-Access-Client-Id', clientId);
-      headers.set('Cf-Access-Client-Secret', clientSecret);
+      headers.set('CF-Access-Client-Id', clientId);
+      headers.set('CF-Access-Client-Secret', clientSecret);
     }
     const response = await fetch(`${API_WORKER_URL}/data/blog-media/${encodeURIComponent(key)}`, {
       method: 'DELETE',
@@ -632,8 +664,8 @@ app.get('/media/list', async (c) => {
     const clientId = c.env.CF_ACCESS_CLIENT_ID;
     const clientSecret = c.env.CF_ACCESS_CLIENT_SECRET;
     if (clientId && clientSecret) {
-      headers.set('Cf-Access-Client-Id', clientId);
-      headers.set('Cf-Access-Client-Secret', clientSecret);
+      headers.set('CF-Access-Client-Id', clientId);
+      headers.set('CF-Access-Client-Secret', clientSecret);
     }
     const response = await fetch(`${API_WORKER_URL}/data/blog-media/list/${user.id}`, { headers });
     const data = await response.json();
@@ -650,10 +682,10 @@ app.get('/favicon.ico', async (c) => {
   const clientId = c.env.CF_ACCESS_CLIENT_ID;
   const clientSecret = c.env.CF_ACCESS_CLIENT_SECRET;
   if (clientId && clientSecret) {
-    headers.set('Cf-Access-Client-Id', clientId);
-    headers.set('Cf-Access-Client-Secret', clientSecret);
+    headers.set('CF-Access-Client-Id', clientId);
+    headers.set('CF-Access-Client-Secret', clientSecret);
   }
-  const response = await fetch('https://api.xaostech.io/data/assets/XAOSTECH_LOGO.png', { headers });
+const response = await fetch('/api/data/assets/XAOSTECH_LOGO.png', { headers });
   
   if (!response.ok) {
     return c.notFound();
