@@ -676,71 +676,15 @@ app.get('/', async (c) => {
     console.error('Failed to fetch posts:', e);
   }
 
-  const postsHtml = posts.length > 0 ? posts.map((p: any) => `
-    <article class="post-card">
-      ${p.featured_image_url ? `<img src="${p.featured_image_url}" alt="${p.title}" class="post-image">` : ''}
-      <div class="post-content">
-        <h2><a href="/posts/${p.slug}">${p.title}</a></h2>
-        <p class="excerpt">${p.excerpt || ''}</p>
-        <div class="post-meta">
-          <div class="author">
-            <img src="${p.author_avatar || '/api/data/assets/XAOSTECH_LOGO.png'}" alt="${p.author_name || 'Author'}" class="author-avatar">
-            <span>${p.author_name || 'Unknown'}</span>
-          </div>
-          <time>${p.published_at ? new Date(p.published_at * 1000).toLocaleDateString() : ''}</time>
-        </div>
-      </div>
-    </article>
-  `).join('') : '<p class="no-posts">No posts yet. Check back soon!</p>';
+  const postsHtml = posts.length > 0 ? posts.map((p: any) => {
+    const img = p.featured_image_url ? '<img src="' + p.featured_image_url + '" alt="' + p.title + '" class="post-image">' : '';
+    const author = p.author_name || 'Author';
+    const avatar = p.author_avatar || '/api/data/assets/XAOSTECH_LOGO.png';
+    const date = p.published_at ? new Date(p.published_at * 1000).toLocaleDateString() : '';
+    return '<article class="post-card">' + img + '<div class="post-content"><h2><a href="/posts/' + p.slug + '">' + p.title + '</a></h2><p class="excerpt">' + (p.excerpt || '') + '</p><div class="post-meta"><div class="author"><img src="' + avatar + '" alt="' + author + '" class="author-avatar"><span>' + author + '</span></div><time>' + date + '</time></div></div></article>';
+  }).join('') : '<p class="no-posts">No posts yet. Check back soon!</p>';
 
-  const html = \`<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>XAOSTECH Blog</title>
-  <link rel="icon" type="image/png" href="/api/data/assets/XAOSTECH_LOGO.png">
-  <style>
-    :root { --primary: #f6821f; --bg: #0a0a0a; --text: #e0e0e0; --card-bg: #1a1a1a; }
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; padding: 2rem; }
-    .container { max-width: 900px; margin: 0 auto; }
-    header { text-align: center; margin-bottom: 3rem; }
-    header h1 { color: var(--primary); font-size: 2.5rem; margin-bottom: 0.5rem; }
-    header p { opacity: 0.7; }
-    .posts { display: flex; flex-direction: column; gap: 2rem; }
-    .post-card { background: var(--card-bg); border-radius: 12px; overflow: hidden; display: flex; flex-direction: column; }
-    .post-image { width: 100%; height: 200px; object-fit: cover; }
-    .post-content { padding: 1.5rem; }
-    .post-content h2 { margin-bottom: 0.75rem; }
-    .post-content h2 a { color: var(--text); text-decoration: none; }
-    .post-content h2 a:hover { color: var(--primary); }
-    .excerpt { opacity: 0.8; margin-bottom: 1rem; line-height: 1.6; }
-    .post-meta { display: flex; justify-content: space-between; align-items: center; opacity: 0.6; font-size: 0.9rem; }
-    .author { display: flex; align-items: center; gap: 0.5rem; }
-    .author-avatar { width: 28px; height: 28px; border-radius: 50%; }
-    .no-posts { text-align: center; opacity: 0.6; padding: 3rem; }
-    footer { text-align: center; margin-top: 4rem; opacity: 0.5; font-size: 0.85rem; }
-    footer a { color: var(--primary); }
-    @media (min-width: 600px) {
-      .post-card { flex-direction: row; }
-      .post-image { width: 300px; height: auto; min-height: 180px; }
-    }
-  </style>
-</head>
-<body>
-  <div class="container">
-    <header>
-      <h1>📝 XAOSTECH Blog</h1>
-      <p>Thoughts, tutorials, and updates from the XAOSTECH team</p>
-    </header>
-    <section class="posts">
-      \${postsHtml}
-    </section>
-  </div>
-  <footer><a href="https://xaostech.io">← Back to XAOSTECH</a></footer>
-</body>
-</html>\`;
+  const html = '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>XAOSTECH Blog</title><link rel="icon" type="image/png" href="/api/data/assets/XAOSTECH_LOGO.png"><style>:root { --primary: #f6821f; --bg: #0a0a0a; --text: #e0e0e0; --card-bg: #1a1a1a; } * { box-sizing: border-box; margin: 0; padding: 0; } body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; padding: 2rem; } .container { max-width: 900px; margin: 0 auto; } header { text-align: center; margin-bottom: 3rem; } header h1 { color: var(--primary); font-size: 2.5rem; margin-bottom: 0.5rem; } header p { opacity: 0.7; } .posts { display: flex; flex-direction: column; gap: 2rem; } .post-card { background: var(--card-bg); border-radius: 12px; overflow: hidden; display: flex; flex-direction: column; } .post-image { width: 100%; height: 200px; object-fit: cover; } .post-content { padding: 1.5rem; } .post-content h2 { margin-bottom: 0.75rem; } .post-content h2 a { color: var(--text); text-decoration: none; } .post-content h2 a:hover { color: var(--primary); } .excerpt { opacity: 0.8; margin-bottom: 1rem; line-height: 1.6; } .post-meta { display: flex; justify-content: space-between; align-items: center; opacity: 0.6; font-size: 0.9rem; } .author { display: flex; align-items: center; gap: 0.5rem; } .author-avatar { width: 28px; height: 28px; border-radius: 50%; } .no-posts { text-align: center; opacity: 0.6; padding: 3rem; } footer { text-align: center; margin-top: 4rem; opacity: 0.5; font-size: 0.85rem; } footer a { color: var(--primary); } @media (min-width: 600px) { .post-card { flex-direction: row; } .post-image { width: 300px; height: auto; min-height: 180px; } }</style></head><body><div class="container"><header><h1>📝 XAOSTECH Blog</h1><p>Thoughts, tutorials, and updates from the XAOSTECH team</p></header><section class="posts">' + postsHtml + '</section></div><footer><a href="https://xaostech.io">← Back to XAOSTECH</a></footer></body></html>';
   return c.html(html);
 });
 
