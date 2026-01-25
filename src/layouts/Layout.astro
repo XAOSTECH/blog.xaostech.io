@@ -1,0 +1,92 @@
+---
+export interface Props {
+  title: string;
+  description?: string;
+  image?: string;
+}
+
+const { title, description = 'Thoughts, tutorials, and updates from the XAOSTECH team', image } = Astro.props;
+---
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{title} - XAOSTECH Blog</title>
+  <meta name="description" content={description}>
+  {image && <meta property="og:image" content={image} />}
+  <link rel="icon" type="image/png" href="/favicon.png">
+  <style is:global>
+    :root {
+      --primary: #f6821f;
+      --bg: #0a0a0a;
+      --text: #e0e0e0;
+      --card-bg: #1a1a1a;
+      --border: #333;
+    }
+    
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      line-height: 1.6;
+    }
+    
+    a { color: var(--primary); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 2rem;
+    }
+    
+    /* Role badges */
+    .badge {
+      display: inline-block;
+      padding: 0.2rem 0.6rem;
+      border-radius: 9999px;
+      font-size: 0.7rem;
+      font-weight: bold;
+      margin-left: 0.5rem;
+    }
+    .badge-owner { background: linear-gradient(135deg, #f6821f, #e65100); color: #fff; }
+    .badge-admin { background: #7c3aed; color: #fff; }
+    .badge-user { background: #333; color: #aaa; }
+    
+    /* Buttons */
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.6rem 1.2rem;
+      border-radius: 6px;
+      font-weight: bold;
+      font-size: 0.9rem;
+      text-decoration: none;
+      border: none;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+    .btn:hover { opacity: 0.9; text-decoration: none; }
+    .btn-primary { background: var(--primary); color: #000; }
+    .btn-secondary { background: transparent; border: 1px solid var(--primary); color: var(--primary); }
+    .btn-github { background: #24292e; color: #fff; }
+    
+    /* Cards */
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+    }
+  </style>
+</head>
+<body>
+  <slot />
+</body>
+</html>
