@@ -1,0 +1,92 @@
+---
+export interface Props {
+  user: {
+    username?: string;
+    email?: string;
+    avatar_url?: string;
+    role?: string;
+  } | null;
+  showNewPost?: boolean;
+}
+
+const { user, showNewPost = false } = Astro.props;
+
+const getRoleBadge = (role: string) => {
+  const badges: Record<string, string> = {
+    owner: 'badge-owner',
+    admin: 'badge-admin',
+    user: 'badge-user',
+  };
+  return badges[role] || 'badge-user';
+};
+---
+
+{user ? (
+  <div class="user-section">
+    <img 
+      src={user.avatar_url || '/favicon.png'} 
+      alt="Avatar" 
+      class="user-avatar"
+    />
+    <div class="user-info">
+      <span class="user-name">
+        {user.username || 'User'}
+        <span class={`badge ${getRoleBadge(user.role || 'user')}`}>
+          {(user.role || 'user').toUpperCase()}
+        </span>
+      </span>
+      <span class="user-email">{user.email || ''}</span>
+    </div>
+    {showNewPost && (user.role === 'owner' || user.role === 'admin') && (
+      <a href="/posts/new" class="btn btn-primary">+ New Post</a>
+    )}
+    <a href="https://account.xaostech.io" class="btn btn-secondary">Account</a>
+  </div>
+) : (
+  <div class="user-section guest">
+    <a href="https://api.xaostech.io/auth/github/login" class="btn btn-github">
+      Sign in with GitHub
+    </a>
+  </div>
+)}
+
+<style>
+  .user-section {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    background: var(--card-bg);
+    padding: 1rem 1.5rem;
+    border-radius: 12px;
+    margin-bottom: 2rem;
+  }
+  
+  .user-section.guest {
+    justify-content: center;
+  }
+  
+  .user-avatar {
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    border: 2px solid var(--primary);
+  }
+  
+  .user-info {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    flex: 1;
+  }
+  
+  .user-name {
+    font-weight: bold;
+    display: flex;
+    align-items: center;
+  }
+  
+  .user-email {
+    opacity: 0.6;
+    font-size: 0.85rem;
+  }
+</style>

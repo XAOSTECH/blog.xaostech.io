@@ -1,0 +1,126 @@
+---
+import Layout from '@/layouts/Layout.astro';
+import UserSection from '@/components/UserSection.astro';
+import PostCard from '@/components/PostCard.astro';
+
+// Get user and runtime from middleware
+const user = Astro.locals.user;
+const runtime = Astro.locals.runtime;
+
+// Pagination
+const page = parseInt(Astro.url.searchParams.get('page') || '1');
+const limit = 10;
+const offset = (page - 1) * limit;
+
+let posts: any[] = [];
+let total = 0;
+let pages = 1;
+
+if (runtime?.env?.DB) {
+  try {
+    const result = await runtime.env.DB.prepare(`
+      SELECT p.id, p.title, p.slug, p.excerpt, p.featured_image_url, p.published_at, p.author_id,
+             u.username as author_name, u.avatar_url as author_avatar
+      FROM posts p
+      LEFT JOIN users u ON p.author_id = u.id
+      WHERE p.status = 'published'
+      ORDER BY p.published_at DESC
+      LIMIT ? OFFSET ?
+    `).bind(limit, offset).all();
+    posts = result.results || [];
+
+    const countResult = await runtime.env.DB.prepare(
+      'SELECT COUNT(*) as total FROM posts WHERE status = "published"'
+    ).first<{ total: number }>();
+    total = countResult?.total || 0;
+    pages = Math.ceil(total / limit);
+  } catch (e) {
+    console.error('Failed to fetch posts:', e);
+  }
+}
+---
+
+<Layout title="All Posts">
+  <div class="container">
+    <a href="/" class="back">← Home</a>
+    
+    <header>
+      <h1>📝 All Posts</h1>
+      <UserSection user={user} showNewPost={true} />
+    </header>
+    
+    <section class="posts">
+      {posts.length > 0 ? (
+        posts.map((post) => <PostCard post={post} />)
+      ) : (
+        <p class="no-posts">No posts yet. Check back soon!</p>
+      )}
+    </section>
+    
+    {pages > 1 && (
+      <nav class="pagination">
+        {page > 1 && (
+          <a href={`/posts?page=${page - 1}`} class="btn btn-secondary">← Previous</a>
+        )}
+        <span class="page-info">Page {page} of {pages}</span>
+        {page < pages && (
+          <a href={`/posts?page=${page + 1}`} class="btn btn-secondary">Next →</a>
+        )}
+      </nav>
+    )}
+  </div>
+  
+  <footer>
+    <a href="https://xaostech.io">← Back to XAOSTECH</a>
+  </footer>
+</Layout>
+
+<style>
+  .back {
+    display: inline-block;
+    margin-bottom: 1rem;
+  }
+  
+  header {
+    margin-bottom: 2rem;
+  }
+  
+  header h1 {
+    color: var(--primary);
+    font-size: 2rem;
+    margin-bottom: 1rem;
+  }
+  
+  .posts {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+  }
+  
+  .no-posts {
+    text-align: center;
+    opacity: 0.6;
+    padding: 3rem;
+    background: var(--card-bg);
+    border-radius: 12px;
+  }
+  
+  .pagination {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 1rem;
+    margin-top: 2rem;
+  }
+  
+  .page-info {
+    opacity: 0.6;
+  }
+  
+  footer {
+    text-align: center;
+    margin-top: 3rem;
+    opacity: 0.5;
+    font-size: 0.85rem;
+  }
+</style>

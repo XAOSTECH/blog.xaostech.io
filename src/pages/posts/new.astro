@@ -1,0 +1,249 @@
+---
+import Layout from '@/layouts/Layout.astro';
+
+// Get user and runtime from middleware
+const user = Astro.locals.user;
+const runtime = Astro.locals.runtime;
+
+// Redirect if not logged in or not admin/owner
+if (!user || (user.role !== 'owner' && user.role !== 'admin')) {
+  return Astro.redirect('/?error=unauthorized');
+}
+
+let error = '';
+let success = '';
+
+// Handle form submission
+if (Astro.request.method === 'POST') {
+  const formData = await Astro.request.formData();
+  const title = formData.get('title')?.toString().trim();
+  const content = formData.get('content')?.toString().trim();
+  const excerpt = formData.get('excerpt')?.toString().trim() || '';
+  const featured_image_url = formData.get('featured_image_url')?.toString().trim() || null;
+  const status = formData.get('status')?.toString() || 'draft';
+
+  if (!title || !content) {
+    error = 'Title and content are required.';
+  } else if (runtime?.env?.DB) {
+    try {
+      // Generate slug from title
+      const baseSlug = title
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-|-$/g, '');
+      
+      // Check for existing slugs and make unique
+      const existing = await runtime.env.DB.prepare(
+        'SELECT COUNT(*) as count FROM posts WHERE slug LIKE ?'
+      ).bind(`${baseSlug}%`).first<{ count: number }>();
+      
+      const slug = existing?.count ? `${baseSlug}-${existing.count + 1}` : baseSlug;
+      
+      const now = Math.floor(Date.now() / 1000);
+      const publishedAt = status === 'published' ? now : null;
+
+      await runtime.env.DB.prepare(`
+        INSERT INTO posts (title, slug, content, excerpt, featured_image_url, author_id, status, published_at, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).bind(title, slug, content, excerpt, featured_image_url, user.id, status, publishedAt, now, now).run();
+
+      // Redirect to the new post
+      return Astro.redirect(`/posts/${slug}?created=true`);
+    } catch (e: any) {
+      console.error('Failed to create post:', e);
+      error = e.message || 'Failed to create post.';
+    }
+  } else {
+    error = 'Database unavailable.';
+  }
+}
+---
+
+<Layout title="New Post">
+  <div class="container">
+    <a href="/" class="back">← Back to Blog</a>
+    
+    <h1>✍️ New Post</h1>
+    
+    {error && <div class="error">{error}</div>}
+    {success && <div class="success">{success}</div>}
+    
+    <form method="POST" class="post-form">
+      <div class="form-group">
+        <label for="title">Title *</label>
+        <input type="text" id="title" name="title" required placeholder="Enter post title..." />
+      </div>
+      
+      <div class="form-group">
+        <label for="excerpt">Excerpt</label>
+        <textarea id="excerpt" name="excerpt" rows="2" placeholder="Brief description for previews..."></textarea>
+      </div>
+      
+      <div class="form-group">
+        <label for="featured_image_url">Featured Image URL</label>
+        <input type="url" id="featured_image_url" name="featured_image_url" placeholder="https://..." />
+      </div>
+      
+      <div class="form-group">
+        <label for="content">Content * (Markdown supported)</label>
+        <textarea id="content" name="content" rows="20" required placeholder="Write your post content here...
+
+# Heading 1
+## Heading 2
+
+**Bold text** and *italic text*
+
+- List item 1
+- List item 2
+
+\`\`\`javascript
+// Code block
+const hello = 'world';
+\`\`\`
+
+> Blockquote
+
+[Link text](https://example.com)"></textarea>
+      </div>
+      
+      <div class="form-group">
+        <label for="status">Status</label>
+        <select id="status" name="status">
+          <option value="draft">Draft</option>
+          <option value="published">Publish Now</option>
+        </select>
+      </div>
+      
+      <div class="form-actions">
+        <button type="submit" class="btn-primary">Create Post</button>
+        <a href="/" class="btn-secondary">Cancel</a>
+      </div>
+    </form>
+  </div>
+</Layout>
+
+<style>
+  .back {
+    display: inline-block;
+    margin-bottom: 2rem;
+  }
+  
+  h1 {
+    margin-bottom: 2rem;
+  }
+  
+  .error {
+    background: #ff4444;
+    color: white;
+    padding: 1rem;
+    border-radius: 8px;
+    margin-bottom: 1.5rem;
+  }
+  
+  .success {
+    background: #00c853;
+    color: white;
+    padding: 1rem;
+    border-radius: 8px;
+    margin-bottom: 1.5rem;
+  }
+  
+  .post-form {
+    max-width: 800px;
+  }
+  
+  .form-group {
+    margin-bottom: 1.5rem;
+  }
+  
+  .form-group label {
+    display: block;
+    margin-bottom: 0.5rem;
+    font-weight: 600;
+    color: #ccc;
+  }
+  
+  .form-group input,
+  .form-group textarea,
+  .form-group select {
+    width: 100%;
+    padding: 0.75rem;
+    background: var(--card-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: white;
+    font-size: 1rem;
+    font-family: inherit;
+  }
+  
+  .form-group input:focus,
+  .form-group textarea:focus,
+  .form-group select:focus {
+    outline: none;
+    border-color: var(--primary);
+  }
+  
+  .form-group textarea {
+    resize: vertical;
+    min-height: 100px;
+    font-family: 'SF Mono', 'Monaco', 'Inconsolata', 'Roboto Mono', monospace;
+  }
+  
+  .form-group textarea#content {
+    min-height: 400px;
+  }
+  
+  .form-group select {
+    cursor: pointer;
+  }
+  
+  .form-actions {
+    display: flex;
+    gap: 1rem;
+    margin-top: 2rem;
+  }
+  
+  .btn-primary {
+    background: var(--primary);
+    color: black;
+    padding: 0.75rem 2rem;
+    border: none;
+    border-radius: 8px;
+    font-size: 1rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: transform 0.2s, box-shadow 0.2s;
+  }
+  
+  .btn-primary:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 255, 170, 0.3);
+  }
+  
+  .btn-secondary {
+    background: transparent;
+    color: #888;
+    padding: 0.75rem 2rem;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 1rem;
+    text-decoration: none;
+    transition: border-color 0.2s;
+  }
+  
+  .btn-secondary:hover {
+    border-color: #666;
+    text-decoration: none;
+  }
+  
+  @media (max-width: 600px) {
+    .form-actions {
+      flex-direction: column;
+    }
+    
+    .btn-primary,
+    .btn-secondary {
+      text-align: center;
+    }
+  }
+</style>

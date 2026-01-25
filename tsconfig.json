@@ -1,17 +1,12 @@
 {
+  "extends": "astro/tsconfigs/strict",
   "compilerOptions": {
-    "target": "esnext",
-    "module": "esnext",
-    "moduleResolution": "bundler",
-    "lib": ["esnext", "webworker"],
-    "strict": true,
-    "skipLibCheck": true,
-    "forceConsistentCasingInFileNames": true,
-    "resolveJsonModule": true,
-    "declaration": true,
-    "declarationMap": true,
-    "sourceMap": true
-  },
-  "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist"]
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"],
+      "@components/*": ["src/components/*"],
+      "@layouts/*": ["src/layouts/*"]
+    },
+    "types": ["@cloudflare/workers-types"]
+  }
 }
