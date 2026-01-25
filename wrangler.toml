@@ -1,11 +1,11 @@
 name = "xaostech-blog"
 compatibility_date = "2025-12-31"
-main = "src/index.ts"
+main = "dist/_worker.js"
 send_metrics = false
 
 [env.production]
 name = "xaostech-blog"
-main = "src/index.ts"
+main = "dist/_worker.js"
 routes = [{ pattern = "blog.xaostech.io/*", zone_name = "xaostech.io" }]
 
 [env.production.vars]
