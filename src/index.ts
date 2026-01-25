@@ -13,6 +13,7 @@ const API_WORKER_URL = 'https://api.xaostech.io';
 interface Env {
   DB: D1Database;
   CACHE: KVNamespace;
+  SESSIONS_KV: KVNamespace;
   MAX_FILE_SIZE: string;
   ADMIN_ROLE: string;
   FREE_TIER_LIMIT_GB: string;
@@ -27,9 +28,12 @@ interface Env {
 
 interface User {
   id: string;
+  userId?: string;
   email: string;
+  username?: string;
   role: string;
-  account_id: string;
+  avatar_url?: string;
+  github_id?: string;
 }
 
 // Hono context variables
@@ -70,27 +74,34 @@ app.use('*', async (c, next) => {
   return applySecurityHeaders(res);
 });
 
-// Middleware to get user from account worker
+// Middleware to get user from session cookie (shared via .xaostech.io domain)
 app.use('*', async (c, next) => {
-  const sessionId = c.req.header('Cookie')?.split('session=')[1]?.split(';')[0];
+  // Parse session_id from cookie
+  const cookie = c.req.header('Cookie') || '';
+  const sessionMatch = cookie.match(/session_id=([^;]+)/);
+  const sessionId = sessionMatch ? sessionMatch[1] : null;
   
   if (sessionId && c.req.path !== '/health') {
     try {
-      // In production, fetch user from account.xaostech.io
-      // For now, extract from header (injected by reverse proxy)
-      const userId = c.req.header('X-User-ID');
-      const userRole = c.req.header('X-User-Role');
-      
-      if (userId) {
-        c.set('user', { 
-          id: userId, 
-          role: userRole || 'user',
-          email: c.req.header('X-User-Email') || '',
-          account_id: c.req.header('X-Account-ID') || ''
-        });
+      // Verify session via shared SESSIONS_KV
+      const sessionData = await c.env.SESSIONS_KV.get(sessionId);
+      if (sessionData) {
+        const session = JSON.parse(sessionData);
+        // Check session hasn't expired
+        if (!session.expires || session.expires > Date.now()) {
+          c.set('user', {
+            id: session.userId || session.id,
+            userId: session.userId || session.id,
+            email: session.email || '',
+            username: session.username,
+            role: session.role || 'user',
+            avatar_url: session.avatar_url,
+            github_id: session.github_id,
+          });
+        }
       }
     } catch (e) {
-      console.error('Auth check failed:', e);
+      console.error('Session verification failed:', e);
     }
   }
   
@@ -205,12 +216,161 @@ app.get('/posts/:slug', async (c) => {
   return c.json(response);
 });
 
-// POST /posts - Create new post (admin only)
+// GET /posts/new - Post creation page (admin or owner only)
+app.get('/posts/new', async (c) => {
+  const user = c.get('user') as User | undefined;
+  
+  if (!user || (user.role !== c.env.ADMIN_ROLE && user.role !== 'owner')) {
+    return c.redirect('/?error=unauthorized');
+  }
+
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>New Post - XAOSTECH Blog</title>
+  <link rel="icon" type="image/png" href="/api/data/assets/XAOSTECH_LOGO.png">
+  <style>
+    :root { --primary: #f6821f; --bg: #0a0a0a; --text: #e0e0e0; --card-bg: #1a1a1a; --border: #333; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; padding: 2rem; }
+    .container { max-width: 800px; margin: 0 auto; }
+    h1 { color: var(--primary); margin-bottom: 0.5rem; }
+    .subtitle { color: #888; margin-bottom: 2rem; }
+    .back { color: var(--primary); text-decoration: none; display: inline-block; margin-bottom: 1rem; }
+    .form-group { margin-bottom: 1.5rem; }
+    .form-group label { display: block; margin-bottom: 0.5rem; font-weight: bold; }
+    .form-group input, .form-group textarea { width: 100%; padding: 0.75rem; border: 1px solid var(--border); border-radius: 6px; background: var(--card-bg); color: var(--text); font-size: 1rem; }
+    .form-group textarea { min-height: 300px; resize: vertical; font-family: monospace; }
+    .form-group small { display: block; margin-top: 0.25rem; color: #666; }
+    .btn { background: var(--primary); color: #000; border: none; padding: 0.75rem 1.5rem; border-radius: 6px; cursor: pointer; font-size: 1rem; font-weight: bold; }
+    .btn:hover { opacity: 0.9; }
+    .btn-secondary { background: transparent; border: 1px solid var(--border); color: var(--text); margin-right: 1rem; }
+    .actions { display: flex; gap: 1rem; margin-top: 2rem; }
+    .error { background: #3a1a1a; border: 1px solid #5a2a2a; color: #ff6b6b; padding: 1rem; border-radius: 6px; margin-bottom: 1rem; display: none; }
+    .success { background: #1a3a1a; border: 1px solid #2a5a2a; color: #6bff6b; padding: 1rem; border-radius: 6px; margin-bottom: 1rem; display: none; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <a href="/" class="back">← Back to Blog</a>
+    <h1>Create New Post</h1>
+    <p class="subtitle">Write a new blog post for XAOSTECH</p>
+    
+    <div id="error" class="error"></div>
+    <div id="success" class="success"></div>
+    
+    <form id="post-form">
+      <div class="form-group">
+        <label for="title">Title</label>
+        <input type="text" id="title" name="title" placeholder="My Awesome Post" required>
+      </div>
+      
+      <div class="form-group">
+        <label for="slug">Slug</label>
+        <input type="text" id="slug" name="slug" placeholder="my-awesome-post" required pattern="[a-z0-9-]+">
+        <small>URL-friendly identifier (lowercase letters, numbers, hyphens only)</small>
+      </div>
+      
+      <div class="form-group">
+        <label for="excerpt">Excerpt</label>
+        <input type="text" id="excerpt" name="excerpt" placeholder="A brief description of this post">
+        <small>Optional - shown in post listings</small>
+      </div>
+      
+      <div class="form-group">
+        <label for="content">Content (Markdown)</label>
+        <textarea id="content" name="content" placeholder="# My Post\\n\\nWrite your content here using Markdown..." required></textarea>
+      </div>
+      
+      <div class="actions">
+        <button type="submit" class="btn" id="save-btn">Save as Draft</button>
+        <button type="button" class="btn" id="publish-btn">Save & Publish</button>
+      </div>
+    </form>
+  </div>
+  
+  <script>
+    // Auto-generate slug from title
+    document.getElementById('title').addEventListener('input', (e) => {
+      const slug = e.target.value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+      document.getElementById('slug').value = slug;
+    });
+    
+    async function submitPost(publish = false) {
+      const errorEl = document.getElementById('error');
+      const successEl = document.getElementById('success');
+      errorEl.style.display = 'none';
+      successEl.style.display = 'none';
+      
+      const data = {
+        title: document.getElementById('title').value,
+        slug: document.getElementById('slug').value,
+        excerpt: document.getElementById('excerpt').value,
+        content: document.getElementById('content').value,
+      };
+      
+      try {
+        const res = await fetch('/posts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify(data)
+        });
+        
+        const result = await res.json();
+        
+        if (!res.ok) {
+          throw new Error(result.error || 'Failed to create post');
+        }
+        
+        if (publish) {
+          // Publish the post
+          const pubRes = await fetch('/posts/' + result.id + '/publish', {
+            method: 'POST',
+            credentials: 'include'
+          });
+          
+          if (!pubRes.ok) {
+            throw new Error('Post saved but failed to publish');
+          }
+          
+          successEl.textContent = 'Post published successfully! Redirecting...';
+          successEl.style.display = 'block';
+          setTimeout(() => window.location.href = '/posts/' + data.slug, 1500);
+        } else {
+          successEl.textContent = 'Draft saved successfully!';
+          successEl.style.display = 'block';
+        }
+      } catch (err) {
+        errorEl.textContent = err.message;
+        errorEl.style.display = 'block';
+      }
+    }
+    
+    document.getElementById('post-form').addEventListener('submit', (e) => {
+      e.preventDefault();
+      submitPost(false);
+    });
+    
+    document.getElementById('publish-btn').addEventListener('click', () => {
+      submitPost(true);
+    });
+  </script>
+</body>
+</html>`;
+
+  return c.html(html);
+});
+
+// POST /posts - Create new post (admin or owner only)
 app.post('/posts', async (c) => {
   const user = c.get('user') as User | undefined;
   
-  if (!user || user.role !== c.env.ADMIN_ROLE) {
-    return c.json({ error: 'Unauthorized' }, 403);
+  // Allow admin OR owner role to create posts
+  if (!user || (user.role !== c.env.ADMIN_ROLE && user.role !== 'owner')) {
+    return c.json({ error: 'Unauthorized - admin or owner required' }, 403);
   }
 
   try {
@@ -242,12 +402,12 @@ app.post('/posts', async (c) => {
   }
 });
 
-// PUT /posts/:id - Update post (admin only)
+// PUT /posts/:id - Update post (admin or owner only)
 app.put('/posts/:id', async (c) => {
   const user = c.get('user') as User | undefined;
   
-  if (!user || user.role !== c.env.ADMIN_ROLE) {
-    return c.json({ error: 'Unauthorized' }, 403);
+  if (!user || (user.role !== c.env.ADMIN_ROLE && user.role !== 'owner')) {
+    return c.json({ error: 'Unauthorized - admin or owner required' }, 403);
   }
 
   const id = c.req.param('id');
@@ -277,8 +437,8 @@ app.put('/posts/:id', async (c) => {
 app.post('/posts/:id/publish', async (c) => {
   const user = c.get('user') as User | undefined;
   
-  if (!user || user.role !== c.env.ADMIN_ROLE) {
-    return c.json({ error: 'Unauthorized' }, 403);
+  if (!user || (user.role !== c.env.ADMIN_ROLE && user.role !== 'owner')) {
+    return c.json({ error: 'Unauthorized - admin or owner required' }, 403);
   }
 
   const id = c.req.param('id');
@@ -659,6 +819,9 @@ app.get('/favicon.ico', serveFaviconHono);
 
 // ============ LANDING PAGE ============
 app.get('/', async (c) => {
+  // Get current user from session
+  const user = c.get('user') as User | undefined;
+  
   // Fetch recent posts
   let posts: any[] = [];
   try {
@@ -676,6 +839,31 @@ app.get('/', async (c) => {
     console.error('Failed to fetch posts:', e);
   }
 
+  // Role badge styling helper
+  const roleBadge = (role: string) => {
+    const colors: Record<string, string> = {
+      owner: 'background: linear-gradient(135deg, #f6821f, #e65100); color: #fff;',
+      admin: 'background: #7c3aed; color: #fff;',
+      user: 'background: #333; color: #aaa;',
+    };
+    return '<span style="display:inline-block; padding: 0.2rem 0.6rem; border-radius: 9999px; font-size: 0.7rem; font-weight: bold; margin-left: 0.5rem; ' + (colors[role] || colors.user) + '">' + role.toUpperCase() + '</span>';
+  };
+
+  // User section HTML
+  const userHtml = user ? 
+    '<div class="user-section">' +
+    '<img src="' + (user.avatar_url || '/api/data/assets/XAOSTECH_LOGO.png') + '" alt="Avatar" class="user-avatar">' +
+    '<div class="user-info">' +
+    '<span class="user-name">' + (user.username || 'User') + roleBadge(user.role || 'user') + '</span>' +
+    '<span class="user-email">' + (user.email || '') + '</span>' +
+    '</div>' +
+    ((user.role === 'owner' || user.role === 'admin') ? '<a href="/posts/new" class="btn-create">+ New Post</a>' : '') +
+    '<a href="https://account.xaostech.io" class="btn-account">Account</a>' +
+    '</div>' :
+    '<div class="user-section guest">' +
+    '<a href="https://api.xaostech.io/auth/github/login" class="btn-login">Sign in with GitHub</a>' +
+    '</div>';
+
   const postsHtml = posts.length > 0 ? posts.map((p: any) => {
     const img = p.featured_image_url ? '<img src="' + p.featured_image_url + '" alt="' + p.title + '" class="post-image">' : '';
     const author = p.author_name || 'Author';
@@ -684,7 +872,7 @@ app.get('/', async (c) => {
     return '<article class="post-card">' + img + '<div class="post-content"><h2><a href="/posts/' + p.slug + '">' + p.title + '</a></h2><p class="excerpt">' + (p.excerpt || '') + '</p><div class="post-meta"><div class="author"><img src="' + avatar + '" alt="' + author + '" class="author-avatar"><span>' + author + '</span></div><time>' + date + '</time></div></div></article>';
   }).join('') : '<p class="no-posts">No posts yet. Check back soon!</p>';
 
-  const html = '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>XAOSTECH Blog</title><link rel="icon" type="image/png" href="/api/data/assets/XAOSTECH_LOGO.png"><style>:root { --primary: #f6821f; --bg: #0a0a0a; --text: #e0e0e0; --card-bg: #1a1a1a; } * { box-sizing: border-box; margin: 0; padding: 0; } body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; padding: 2rem; } .container { max-width: 900px; margin: 0 auto; } header { text-align: center; margin-bottom: 3rem; } header h1 { color: var(--primary); font-size: 2.5rem; margin-bottom: 0.5rem; } header p { opacity: 0.7; } .posts { display: flex; flex-direction: column; gap: 2rem; } .post-card { background: var(--card-bg); border-radius: 12px; overflow: hidden; display: flex; flex-direction: column; } .post-image { width: 100%; height: 200px; object-fit: cover; } .post-content { padding: 1.5rem; } .post-content h2 { margin-bottom: 0.75rem; } .post-content h2 a { color: var(--text); text-decoration: none; } .post-content h2 a:hover { color: var(--primary); } .excerpt { opacity: 0.8; margin-bottom: 1rem; line-height: 1.6; } .post-meta { display: flex; justify-content: space-between; align-items: center; opacity: 0.6; font-size: 0.9rem; } .author { display: flex; align-items: center; gap: 0.5rem; } .author-avatar { width: 28px; height: 28px; border-radius: 50%; } .no-posts { text-align: center; opacity: 0.6; padding: 3rem; } footer { text-align: center; margin-top: 4rem; opacity: 0.5; font-size: 0.85rem; } footer a { color: var(--primary); } @media (min-width: 600px) { .post-card { flex-direction: row; } .post-image { width: 300px; height: auto; min-height: 180px; } }</style></head><body><div class="container"><header><h1>📝 XAOSTECH Blog</h1><p>Thoughts, tutorials, and updates from the XAOSTECH team</p></header><section class="posts">' + postsHtml + '</section></div><footer><a href="https://xaostech.io">← Back to XAOSTECH</a></footer></body></html>';
+  const html = '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>XAOSTECH Blog</title><link rel="icon" type="image/png" href="/api/data/assets/XAOSTECH_LOGO.png"><style>:root { --primary: #f6821f; --bg: #0a0a0a; --text: #e0e0e0; --card-bg: #1a1a1a; } * { box-sizing: border-box; margin: 0; padding: 0; } body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; padding: 2rem; } .container { max-width: 900px; margin: 0 auto; } header { text-align: center; margin-bottom: 2rem; } header h1 { color: var(--primary); font-size: 2.5rem; margin-bottom: 0.5rem; } header p { opacity: 0.7; } .user-section { display: flex; align-items: center; gap: 1rem; background: var(--card-bg); padding: 1rem 1.5rem; border-radius: 12px; margin-bottom: 2rem; } .user-section.guest { justify-content: center; } .user-avatar { width: 48px; height: 48px; border-radius: 50%; border: 2px solid var(--primary); } .user-info { display: flex; flex-direction: column; gap: 0.25rem; flex: 1; } .user-name { font-weight: bold; display: flex; align-items: center; } .user-email { opacity: 0.6; font-size: 0.85rem; } .btn-create, .btn-account, .btn-login { padding: 0.6rem 1.2rem; border-radius: 6px; text-decoration: none; font-weight: bold; font-size: 0.9rem; } .btn-create { background: var(--primary); color: #000; } .btn-account { background: transparent; border: 1px solid var(--primary); color: var(--primary); } .btn-login { background: #24292e; color: #fff; padding: 0.75rem 1.5rem; } .btn-login:hover { background: #2f363d; } .posts { display: flex; flex-direction: column; gap: 2rem; } .post-card { background: var(--card-bg); border-radius: 12px; overflow: hidden; display: flex; flex-direction: column; } .post-image { width: 100%; height: 200px; object-fit: cover; } .post-content { padding: 1.5rem; } .post-content h2 { margin-bottom: 0.75rem; } .post-content h2 a { color: var(--text); text-decoration: none; } .post-content h2 a:hover { color: var(--primary); } .excerpt { opacity: 0.8; margin-bottom: 1rem; line-height: 1.6; } .post-meta { display: flex; justify-content: space-between; align-items: center; opacity: 0.6; font-size: 0.9rem; } .author { display: flex; align-items: center; gap: 0.5rem; } .author-avatar { width: 28px; height: 28px; border-radius: 50%; } .no-posts { text-align: center; opacity: 0.6; padding: 3rem; } footer { text-align: center; margin-top: 4rem; opacity: 0.5; font-size: 0.85rem; } footer a { color: var(--primary); } @media (min-width: 600px) { .post-card { flex-direction: row; } .post-image { width: 300px; height: auto; min-height: 180px; } }</style></head><body><div class="container"><header><h1>📝 XAOSTECH Blog</h1><p>Thoughts, tutorials, and updates from the XAOSTECH team</p></header>' + userHtml + '<section class="posts">' + postsHtml + '</section></div><footer><a href="https://xaostech.io">← Back to XAOSTECH</a></footer></body></html>';
   return c.html(html);
 });
 

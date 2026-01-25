@@ -23,6 +23,10 @@ database_id = "${D1_BLOG_DB_ID}"
 binding = "CACHE"
 id = "${KV_CACHE_ID}"
 
+[[env.production.kv_namespaces]]
+binding = "SESSIONS_KV"
+id = "${KV_SESSIONS_ID}"
+
 [env.testing]
 routes = [{ pattern = "blog.testing.local/*", zone_name = "localhost" }]
 
