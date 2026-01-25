@@ -75,12 +75,13 @@ app.use('*', async (c, next) => {
 });
 
 // Middleware to get user from session cookie (shared via .xaostech.io domain)
+// Also syncs user data to local blog-db for efficient JOINs
 app.use('*', async (c, next) => {
   // Parse session_id from cookie
   const cookie = c.req.header('Cookie') || '';
   const sessionMatch = cookie.match(/session_id=([^;]+)/);
   const sessionId = sessionMatch ? sessionMatch[1] : null;
-  
+
   if (sessionId && c.req.path !== '/health') {
     try {
       // Verify session via shared SESSIONS_KV
@@ -89,7 +90,7 @@ app.use('*', async (c, next) => {
         const session = JSON.parse(sessionData);
         // Check session hasn't expired
         if (!session.expires || session.expires > Date.now()) {
-          c.set('user', {
+          const user = {
             id: session.userId || session.id,
             userId: session.userId || session.id,
             email: session.email || '',
@@ -97,14 +98,32 @@ app.use('*', async (c, next) => {
             role: session.role || 'user',
             avatar_url: session.avatar_url,
             github_id: session.github_id,
-          });
+          };
+          c.set('user', user);
+
+          // Sync user to local blog-db for efficient JOINs (fire and forget)
+          try {
+            await c.env.DB.prepare(`
+              INSERT INTO users (id, github_id, username, email, avatar_url, role, updated_at)
+              VALUES (?, ?, ?, ?, ?, ?, unixepoch())
+              ON CONFLICT(id) DO UPDATE SET
+                username = excluded.username,
+                email = excluded.email,
+                avatar_url = excluded.avatar_url,
+                role = excluded.role,
+                updated_at = unixepoch()
+            `).bind(user.id, user.github_id || null, user.username || null, user.email || null, user.avatar_url || null, user.role).run();
+          } catch (syncErr) {
+            // Ignore sync errors - table may not exist yet
+            console.log('User sync skipped (table may not exist):', syncErr);
+          }
         }
       }
     } catch (e) {
       console.error('Session verification failed:', e);
     }
   }
-  
+
   await next();
 });
 
@@ -206,7 +225,7 @@ app.get('/posts/:slug', async (c) => {
   ).bind(post.id).all();
 
   const response = { post, comments: comments.results };
-  
+
   await c.env.CACHE.put(
     `post:${slug}`,
     JSON.stringify(response),
@@ -218,13 +237,18 @@ app.get('/posts/:slug', async (c) => {
 
 // GET /posts/new - Post creation page (admin or owner only)
 app.get('/posts/new', async (c) => {
-  const user = c.get('user') as User | undefined;
-  
-  if (!user || (user.role !== c.env.ADMIN_ROLE && user.role !== 'owner')) {
-    return c.redirect('/?error=unauthorized');
-  }
+  try {
+    const user = c.get('user') as User | undefined;
 
-  const html = `<!DOCTYPE html>
+    if (!user) {
+      return c.redirect('https://api.xaostech.io/auth/github/login?redirect=' + encodeURIComponent('https://blog.xaostech.io/posts/new'));
+    }
+
+    if (user.role !== c.env.ADMIN_ROLE && user.role !== 'owner') {
+      return c.redirect('/?error=unauthorized');
+    }
+
+    const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -361,13 +385,22 @@ app.get('/posts/new', async (c) => {
 </body>
 </html>`;
 
-  return c.html(html);
+    return c.html(html);
+  } catch (err) {
+    console.error('Error rendering /posts/new:', err);
+    return c.html(`<!DOCTYPE html><html><head><title>Error</title></head><body style="background:#0a0a0a;color:#e0e0e0;font-family:sans-serif;padding:2rem;text-align:center;">
+      <h1>500 - Server Error</h1>
+      <p>Unable to load post editor. Please try again later.</p>
+      <p style="opacity:0.5;font-size:0.8rem;">${err instanceof Error ? err.message : 'Unknown error'}</p>
+      <a href="/" style="color:#f6821f;">← Back to Blog</a>
+    </body></html>`, 500);
+  }
 });
 
 // POST /posts - Create new post (admin or owner only)
 app.post('/posts', async (c) => {
   const user = c.get('user') as User | undefined;
-  
+
   // Allow admin OR owner role to create posts
   if (!user || (user.role !== c.env.ADMIN_ROLE && user.role !== 'owner')) {
     return c.json({ error: 'Unauthorized - admin or owner required' }, 403);
@@ -405,13 +438,13 @@ app.post('/posts', async (c) => {
 // PUT /posts/:id - Update post (admin or owner only)
 app.put('/posts/:id', async (c) => {
   const user = c.get('user') as User | undefined;
-  
+
   if (!user || (user.role !== c.env.ADMIN_ROLE && user.role !== 'owner')) {
     return c.json({ error: 'Unauthorized - admin or owner required' }, 403);
   }
 
   const id = c.req.param('id');
-  
+
   try {
     const data = await c.req.json();
     const validated = PostSchema.partial().parse(data);
@@ -436,7 +469,7 @@ app.put('/posts/:id', async (c) => {
 // POST /posts/:id/publish - Publish a draft post
 app.post('/posts/:id/publish', async (c) => {
   const user = c.get('user') as User | undefined;
-  
+
   if (!user || (user.role !== c.env.ADMIN_ROLE && user.role !== 'owner')) {
     return c.json({ error: 'Unauthorized - admin or owner required' }, 403);
   }
@@ -494,11 +527,11 @@ app.get('/walls/:id', async (c) => {
 // POST /walls/:id/comments - Add comment to wall or post
 app.post('/walls/:id/comments', async (c) => {
   const wallId = c.req.param('id');
-  
+
   try {
     const data = await c.req.json();
     const validated = CommentSchema.parse(data);
-    
+
     const user = c.get('user') as User | undefined;
     const id = crypto.randomUUID();
     const now = Math.floor(Date.now() / 1000);
@@ -530,7 +563,7 @@ app.post('/walls/:id/comments', async (c) => {
 // POST /upload - Upload media (proxied through API worker to data worker)
 app.post('/upload', async (c) => {
   const user = c.get('user') as User | undefined;
-  
+
   if (!user) {
     return c.json({ error: 'Authentication required' }, 401);
   }
@@ -590,8 +623,8 @@ app.post('/upload', async (c) => {
     // Record metadata locally
     const mediaId = result.mediaId || crypto.randomUUID();
     const now = Math.floor(Date.now() / 1000);
-    const fileType = file.type.startsWith('audio') ? 'audio' 
-                   : file.type.startsWith('image') ? 'image' : 'video';
+    const fileType = file.type.startsWith('audio') ? 'audio'
+      : file.type.startsWith('image') ? 'image' : 'video';
 
     await c.env.DB.prepare(
       `INSERT INTO media (id, file_name, file_size, file_type, r2_key, post_id, comment_id, uploaded_by, created_at)
@@ -616,8 +649,8 @@ app.post('/upload', async (c) => {
        total_bytes_used = total_bytes_used + ?, total_files = total_files + 1`
     ).bind(user.id, file.size, now, file.size).run();
 
-    return c.json({ 
-      mediaId, 
+    return c.json({
+      mediaId,
       url: result.url,
       file_type: fileType,
       file_size: file.size
@@ -633,7 +666,7 @@ app.post('/upload', async (c) => {
 // GET /admin/posts - List all posts (admin)
 app.get('/admin/posts', async (c) => {
   const user = c.get('user') as User | undefined;
-  
+
   if (!user || user.role !== c.env.ADMIN_ROLE) {
     return c.json({ error: 'Unauthorized' }, 403);
   }
@@ -648,7 +681,7 @@ app.get('/admin/posts', async (c) => {
 // GET /admin/comments - Moderate pending comments
 app.get('/admin/comments', async (c) => {
   const user = c.get('user') as User | undefined;
-  
+
   if (!user || user.role !== c.env.ADMIN_ROLE) {
     return c.json({ error: 'Unauthorized' }, 403);
   }
@@ -663,7 +696,7 @@ app.get('/admin/comments', async (c) => {
 // POST /admin/comments/:id/approve - Approve comment
 app.post('/admin/comments/:id/approve', async (c) => {
   const user = c.get('user') as User | undefined;
-  
+
   if (!user || user.role !== c.env.ADMIN_ROLE) {
     return c.json({ error: 'Unauthorized' }, 403);
   }
@@ -680,7 +713,7 @@ app.post('/admin/comments/:id/approve', async (c) => {
 // DELETE /admin/comments/:id - Delete comment
 app.delete('/admin/comments/:id', async (c) => {
   const user = c.get('user') as User | undefined;
-  
+
   if (!user || user.role !== c.env.ADMIN_ROLE) {
     return c.json({ error: 'Unauthorized' }, 403);
   }
@@ -702,7 +735,7 @@ app.delete('/admin/comments/:id', async (c) => {
 // GET /media/quota - Check user storage quota (proxied via API to data worker)
 app.get('/media/quota', async (c) => {
   const user = c.get('user') as User | undefined;
-  
+
   if (!user) {
     return c.json({ error: 'Unauthorized' }, 401);
   }
@@ -727,7 +760,7 @@ app.get('/media/quota', async (c) => {
 // POST /media/upload - Upload image/audio (proxied via API to data worker)
 app.post('/media/upload', async (c) => {
   const user = c.get('user') as User | undefined;
-  
+
   if (!user) {
     return c.json({ error: 'Unauthorized' }, 401);
   }
@@ -735,7 +768,7 @@ app.post('/media/upload', async (c) => {
   try {
     const formData = await c.req.formData();
     const file = formData.get('file') as File;
-    
+
     if (!file) {
       return c.json({ error: 'No file provided' }, 400);
     }
@@ -765,7 +798,7 @@ app.post('/media/upload', async (c) => {
 // DELETE /media/:key - Delete file (proxied to data worker)
 app.delete('/media/:key', async (c) => {
   const user = c.get('user') as User | undefined;
-  
+
   if (!user) {
     return c.json({ error: 'Unauthorized' }, 401);
   }
@@ -797,7 +830,7 @@ app.delete('/media/:key', async (c) => {
 // GET /media/list - List user's uploaded files (proxied via API to data worker)
 app.get('/media/list', async (c) => {
   const user = c.get('user') as User | undefined;
-  
+
   if (!user) {
     return c.json({ error: 'Unauthorized' }, 401);
   }
@@ -821,7 +854,7 @@ app.get('/favicon.ico', serveFaviconHono);
 app.get('/', async (c) => {
   // Get current user from session
   const user = c.get('user') as User | undefined;
-  
+
   // Fetch recent posts
   let posts: any[] = [];
   try {
@@ -850,7 +883,7 @@ app.get('/', async (c) => {
   };
 
   // User section HTML
-  const userHtml = user ? 
+  const userHtml = user ?
     '<div class="user-section">' +
     '<img src="' + (user.avatar_url || '/api/data/assets/XAOSTECH_LOGO.png') + '" alt="Avatar" class="user-avatar">' +
     '<div class="user-info">' +
