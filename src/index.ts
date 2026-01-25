@@ -508,8 +508,8 @@ app.get('/posts/:slug', async (c) => {
   const canEdit = user && (user.role === 'owner' || user.role === 'admin' || user.id === post.author_id);
 
   // Format date
-  const publishDate = post.published_at ? new Date(post.published_at * 1000).toLocaleDateString('en-US', { 
-    year: 'numeric', month: 'long', day: 'numeric' 
+  const publishDate = post.published_at ? new Date(post.published_at * 1000).toLocaleDateString('en-US', {
+    year: 'numeric', month: 'long', day: 'numeric'
   }) : '';
 
   // Simple markdown to HTML (basic support)
@@ -532,7 +532,7 @@ app.get('/posts/:slug', async (c) => {
   const contentHtml = '<p>' + renderMarkdown(post.content || '') + '</p>';
 
   // Comments HTML
-  const commentsHtml = (comments.results || []).length > 0 
+  const commentsHtml = (comments.results || []).length > 0
     ? (comments.results as any[]).map((c: any) => `
         <div class="comment">
           <div class="comment-meta">
