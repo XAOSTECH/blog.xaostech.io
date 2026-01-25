@@ -34,6 +34,7 @@ interface User {
   role: string;
   avatar_url?: string;
   github_id?: string;
+  account_id?: string;
 }
 
 // Hono context variables
@@ -201,41 +202,8 @@ app.get('/posts', async (c) => {
   return c.json(response);
 });
 
-// GET /posts/:slug - Get single post with comments
-app.get('/posts/:slug', async (c) => {
-  const slug = c.req.param('slug');
-
-  const cached = await c.env.CACHE.get(`post:${slug}`);
-  if (cached) {
-    return c.json(JSON.parse(cached));
-  }
-
-  const post = await c.env.DB.prepare(
-    'SELECT * FROM posts WHERE slug = ? AND status = "published"'
-  ).bind(slug).first();
-
-  if (!post) {
-    return c.json({ error: 'Post not found' }, 404);
-  }
-
-  const comments = await c.env.DB.prepare(
-    `SELECT id, content, author_name, image_url, audio_url, created_at, status
-     FROM comments WHERE post_id = ? AND status = 'approved'
-     ORDER BY created_at DESC`
-  ).bind(post.id).all();
-
-  const response = { post, comments: comments.results };
-
-  await c.env.CACHE.put(
-    `post:${slug}`,
-    JSON.stringify(response),
-    { expirationTtl: parseInt(c.env.CACHE_TTL) }
-  );
-
-  return c.json(response);
-});
-
 // GET /posts/new - Post creation page (admin or owner only)
+// IMPORTANT: This must come BEFORE /posts/:slug to avoid "new" being treated as a slug
 app.get('/posts/new', async (c) => {
   try {
     const user = c.get('user') as User | undefined;
@@ -395,6 +363,40 @@ app.get('/posts/new', async (c) => {
       <a href="/" style="color:#f6821f;">← Back to Blog</a>
     </body></html>`, 500);
   }
+});
+
+// GET /posts/:slug - Get single post with comments
+app.get('/posts/:slug', async (c) => {
+  const slug = c.req.param('slug');
+
+  const cached = await c.env.CACHE.get(`post:${slug}`);
+  if (cached) {
+    return c.json(JSON.parse(cached));
+  }
+
+  const post = await c.env.DB.prepare(
+    'SELECT * FROM posts WHERE slug = ? AND status = "published"'
+  ).bind(slug).first();
+
+  if (!post) {
+    return c.json({ error: 'Post not found' }, 404);
+  }
+
+  const comments = await c.env.DB.prepare(
+    `SELECT id, content, author_name, image_url, audio_url, created_at, status
+     FROM comments WHERE post_id = ? AND status = 'approved'
+     ORDER BY created_at DESC`
+  ).bind(post.id).all();
+
+  const response = { post, comments: comments.results };
+
+  await c.env.CACHE.put(
+    `post:${slug}`,
+    JSON.stringify(response),
+    { expirationTtl: parseInt(c.env.CACHE_TTL) }
+  );
+
+  return c.json(response);
 });
 
 // POST /posts - Create new post (admin or owner only)
@@ -609,7 +611,7 @@ app.post('/upload', async (c) => {
         'X-User-ID': user.id,
         'X-User-Role': user.role,
         'X-User-Email': user.email,
-        'X-Account-ID': user.account_id,
+        'X-Account-ID': user.account_id || user.id,
       },
       body: uploadFormData,
     });
