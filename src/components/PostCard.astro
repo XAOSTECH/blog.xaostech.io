@@ -103,8 +103,11 @@ const formatDate = (timestamp?: number) => {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    gap: 1rem;
     opacity: 0.6;
     font-size: 0.85rem;
+    flex-wrap: wrap;
+    margin-top: 0.75rem;
   }
   
   .author {
@@ -117,6 +120,10 @@ const formatDate = (timestamp?: number) => {
     width: 24px;
     height: 24px;
     border-radius: 50%;
+  }
+  
+  time {
+    white-space: nowrap;
   }
   
   @media (min-width: 600px) {

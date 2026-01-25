@@ -16,11 +16,6 @@ ADMIN_ROLE = "admin"
 FREE_TIER_LIMIT_GB = "5"
 CACHE_TTL = "3600"
 
-[[env.production.d1_databases]]
-binding = "DB"
-database_name = "blog-db"
-database_id = "${D1_BLOG_DB_ID}"
-
 [[env.production.kv_namespaces]]
 binding = "CACHE"
 id = "${KV_CACHE_ID}"
