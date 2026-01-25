@@ -4,10 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "astro dev",
-    "build": "astro check && astro build",
-    "preview": "astro preview",
-    "deploy": "npm run build && wrangler pages deploy dist --project-name=blog-xaostech-io",
-    "astro": "astro"
+    "build": "astro build"
   },
   "dependencies": {
     "astro": "^4.16.0",
