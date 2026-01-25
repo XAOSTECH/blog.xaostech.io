@@ -164,21 +164,21 @@ app.get('/favicon.ico', serveFaviconHono);
 
 // ============ BLOG POSTS ENDPOINTS ============
 
-// GET /posts - List all published posts (paginated)
+// GET /posts - List all published posts (paginated) - HTML or JSON
 app.get('/posts', async (c) => {
   const page = parseInt(c.req.query('page') || '1');
   const limit = parseInt(c.req.query('limit') || '10');
   const offset = (page - 1) * limit;
-
-  const cached = await c.env.CACHE.get(`posts:page:${page}`);
-  if (cached) {
-    return c.json(JSON.parse(cached));
-  }
+  const acceptHeader = c.req.header('Accept') || '';
+  const wantsJson = acceptHeader.includes('application/json') || c.req.query('format') === 'json';
 
   const result = await c.env.DB.prepare(
-    `SELECT id, title, slug, excerpt, featured_image_url, published_at, author_id
-     FROM posts WHERE status = 'published'
-     ORDER BY published_at DESC
+    `SELECT p.id, p.title, p.slug, p.excerpt, p.featured_image_url, p.published_at, p.author_id,
+            u.username as author_name, u.avatar_url as author_avatar
+     FROM posts p
+     LEFT JOIN users u ON p.author_id = u.id
+     WHERE p.status = 'published'
+     ORDER BY p.published_at DESC
      LIMIT ? OFFSET ?`
   ).bind(limit, offset).all();
 
@@ -186,20 +186,123 @@ app.get('/posts', async (c) => {
     'SELECT COUNT(*) as total FROM posts WHERE status = "published"'
   ).first<{ total: number }>();
 
-  const response = {
-    posts: result.results,
-    total: count?.total || 0,
-    page,
-    pages: Math.ceil((count?.total || 0) / limit)
+  const posts = result.results || [];
+  const total = count?.total || 0;
+  const pages = Math.ceil(total / limit);
+
+  // Return JSON if requested
+  if (wantsJson) {
+    return c.json({ posts, total, page, pages });
+  }
+
+  // Get current user
+  const user = c.get('user') as User | undefined;
+
+  // Role badge styling helper
+  const roleBadge = (role: string) => {
+    const colors: Record<string, string> = {
+      owner: 'background: linear-gradient(135deg, #f6821f, #e65100); color: #fff;',
+      admin: 'background: #7c3aed; color: #fff;',
+      user: 'background: #333; color: #aaa;',
+    };
+    return '<span style="display:inline-block; padding: 0.2rem 0.6rem; border-radius: 9999px; font-size: 0.7rem; font-weight: bold; margin-left: 0.5rem; ' + (colors[role] || colors.user) + '">' + role.toUpperCase() + '</span>';
   };
 
-  await c.env.CACHE.put(
-    `posts:page:${page}`,
-    JSON.stringify(response),
-    { expirationTtl: parseInt(c.env.CACHE_TTL) }
-  );
+  // User section HTML
+  const userHtml = user ?
+    '<div class="user-section">' +
+    '<img src="' + (user.avatar_url || '/api/data/assets/XAOSTECH_LOGO.png') + '" alt="Avatar" class="user-avatar">' +
+    '<div class="user-info">' +
+    '<span class="user-name">' + (user.username || 'User') + roleBadge(user.role || 'user') + '</span>' +
+    '</div>' +
+    ((user.role === 'owner' || user.role === 'admin') ? '<a href="/posts/new" class="btn-create">+ New Post</a>' : '') +
+    '</div>' :
+    '<div class="user-section guest">' +
+    '<a href="https://api.xaostech.io/auth/github/login" class="btn-login">Sign in</a>' +
+    '</div>';
 
-  return c.json(response);
+  // Posts HTML
+  const postsHtml = posts.length > 0 ? (posts as any[]).map((p: any) => {
+    const img = p.featured_image_url ? '<img src="' + p.featured_image_url + '" alt="' + p.title + '" class="post-image">' : '';
+    const author = p.author_name || 'Author';
+    const avatar = p.author_avatar || '/api/data/assets/XAOSTECH_LOGO.png';
+    const date = p.published_at ? new Date(p.published_at * 1000).toLocaleDateString() : '';
+    return '<article class="post-card"><a href="/posts/' + p.slug + '" class="post-link">' + img + '<div class="post-content"><h2>' + p.title + '</h2><p class="excerpt">' + (p.excerpt || '') + '</p><div class="post-meta"><div class="author"><img src="' + avatar + '" alt="' + author + '" class="author-avatar"><span>' + author + '</span></div><time>' + date + '</time></div></div></a></article>';
+  }).join('') : '<p class="no-posts">No posts yet. Check back soon!</p>';
+
+  // Pagination HTML
+  let paginationHtml = '';
+  if (pages > 1) {
+    paginationHtml = '<nav class="pagination">';
+    if (page > 1) paginationHtml += '<a href="/posts?page=' + (page - 1) + '" class="page-btn">← Previous</a>';
+    paginationHtml += '<span class="page-info">Page ' + page + ' of ' + pages + '</span>';
+    if (page < pages) paginationHtml += '<a href="/posts?page=' + (page + 1) + '" class="page-btn">Next →</a>';
+    paginationHtml += '</nav>';
+  }
+
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>All Posts - XAOSTECH Blog</title>
+  <link rel="icon" type="image/png" href="/api/data/assets/XAOSTECH_LOGO.png">
+  <style>
+    :root { --primary: #f6821f; --bg: #0a0a0a; --text: #e0e0e0; --card-bg: #1a1a1a; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; padding: 2rem; }
+    .container { max-width: 900px; margin: 0 auto; }
+    .back { color: var(--primary); text-decoration: none; display: inline-block; margin-bottom: 1rem; }
+    header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem; }
+    header h1 { color: var(--primary); font-size: 2rem; }
+    .user-section { display: flex; align-items: center; gap: 1rem; }
+    .user-section.guest { }
+    .user-avatar { width: 36px; height: 36px; border-radius: 50%; border: 2px solid var(--primary); }
+    .user-info { display: flex; flex-direction: column; }
+    .user-name { font-weight: bold; display: flex; align-items: center; font-size: 0.9rem; }
+    .btn-create, .btn-login { padding: 0.5rem 1rem; border-radius: 6px; text-decoration: none; font-weight: bold; font-size: 0.85rem; }
+    .btn-create { background: var(--primary); color: #000; }
+    .btn-login { background: #24292e; color: #fff; }
+    .posts { display: flex; flex-direction: column; gap: 1.5rem; }
+    .post-card { background: var(--card-bg); border-radius: 12px; overflow: hidden; }
+    .post-link { display: flex; flex-direction: column; text-decoration: none; color: inherit; }
+    .post-link:hover { opacity: 0.95; }
+    .post-link:hover h2 { color: var(--primary); }
+    .post-image { width: 100%; height: 180px; object-fit: cover; }
+    .post-content { padding: 1.25rem; }
+    .post-content h2 { margin-bottom: 0.5rem; font-size: 1.25rem; transition: color 0.2s; }
+    .excerpt { opacity: 0.7; margin-bottom: 0.75rem; font-size: 0.95rem; line-height: 1.5; }
+    .post-meta { display: flex; justify-content: space-between; align-items: center; opacity: 0.6; font-size: 0.85rem; }
+    .author { display: flex; align-items: center; gap: 0.5rem; }
+    .author-avatar { width: 24px; height: 24px; border-radius: 50%; }
+    .no-posts { text-align: center; opacity: 0.6; padding: 3rem; }
+    .pagination { display: flex; justify-content: center; align-items: center; gap: 1rem; margin-top: 2rem; }
+    .page-btn { padding: 0.5rem 1rem; background: var(--card-bg); border-radius: 6px; color: var(--primary); text-decoration: none; }
+    .page-info { opacity: 0.6; }
+    footer { text-align: center; margin-top: 3rem; opacity: 0.5; font-size: 0.85rem; }
+    footer a { color: var(--primary); }
+    @media (min-width: 600px) { .post-link { flex-direction: row; } .post-image { width: 240px; height: auto; min-height: 140px; } }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <a href="/" class="back">← Home</a>
+    <header>
+      <h1>📝 All Posts</h1>
+      ${userHtml}
+    </header>
+    <section class="posts">
+      ${postsHtml}
+    </section>
+    ${paginationHtml}
+  </div>
+  <footer>
+    <a href="https://xaostech.io">← Back to XAOSTECH</a>
+  </footer>
+</body>
+</html>`;
+
+  return c.html(html);
 });
 
 // GET /posts/new - Post creation page (admin or owner only)
@@ -365,21 +468,28 @@ app.get('/posts/new', async (c) => {
   }
 });
 
-// GET /posts/:slug - Get single post with comments
+// GET /posts/:slug - Get single post with comments (HTML or JSON)
 app.get('/posts/:slug', async (c) => {
   const slug = c.req.param('slug');
-
-  const cached = await c.env.CACHE.get(`post:${slug}`);
-  if (cached) {
-    return c.json(JSON.parse(cached));
-  }
+  const acceptHeader = c.req.header('Accept') || '';
+  const wantsJson = acceptHeader.includes('application/json') || c.req.query('format') === 'json';
 
   const post = await c.env.DB.prepare(
-    'SELECT * FROM posts WHERE slug = ? AND status = "published"'
-  ).bind(slug).first();
+    `SELECT p.*, u.username as author_name, u.avatar_url as author_avatar
+     FROM posts p
+     LEFT JOIN users u ON p.author_id = u.id
+     WHERE p.slug = ? AND p.status = 'published'`
+  ).bind(slug).first() as any;
 
   if (!post) {
-    return c.json({ error: 'Post not found' }, 404);
+    if (wantsJson) {
+      return c.json({ error: 'Post not found' }, 404);
+    }
+    return c.html(`<!DOCTYPE html><html><head><title>Not Found</title></head><body style="background:#0a0a0a;color:#e0e0e0;font-family:sans-serif;padding:2rem;text-align:center;">
+      <h1>404 - Post Not Found</h1>
+      <p>The post you're looking for doesn't exist.</p>
+      <a href="/" style="color:#f6821f;">← Back to Blog</a>
+    </body></html>`, 404);
   }
 
   const comments = await c.env.DB.prepare(
@@ -388,15 +498,130 @@ app.get('/posts/:slug', async (c) => {
      ORDER BY created_at DESC`
   ).bind(post.id).all();
 
-  const response = { post, comments: comments.results };
+  // Return JSON if requested
+  if (wantsJson) {
+    return c.json({ post, comments: comments.results });
+  }
 
-  await c.env.CACHE.put(
-    `post:${slug}`,
-    JSON.stringify(response),
-    { expirationTtl: parseInt(c.env.CACHE_TTL) }
-  );
+  // Get current user for edit button
+  const user = c.get('user') as User | undefined;
+  const canEdit = user && (user.role === 'owner' || user.role === 'admin' || user.id === post.author_id);
 
-  return c.json(response);
+  // Format date
+  const publishDate = post.published_at ? new Date(post.published_at * 1000).toLocaleDateString('en-US', { 
+    year: 'numeric', month: 'long', day: 'numeric' 
+  }) : '';
+
+  // Simple markdown to HTML (basic support)
+  const renderMarkdown = (md: string) => {
+    return md
+      .replace(/^### (.*$)/gim, '<h3>$1</h3>')
+      .replace(/^## (.*$)/gim, '<h2>$1</h2>')
+      .replace(/^# (.*$)/gim, '<h1>$1</h1>')
+      .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+      .replace(/\*(.*?)\*/g, '<em>$1</em>')
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+      .replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code class="language-$1">$2</code></pre>')
+      .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>')
+      .replace(/^- (.*$)/gim, '<li>$1</li>')
+      .replace(/(<li>.*<\/li>)/s, '<ul>$1</ul>')
+      .replace(/\n\n/g, '</p><p>')
+      .replace(/\n/g, '<br>');
+  };
+
+  const contentHtml = '<p>' + renderMarkdown(post.content || '') + '</p>';
+
+  // Comments HTML
+  const commentsHtml = (comments.results || []).length > 0 
+    ? (comments.results as any[]).map((c: any) => `
+        <div class="comment">
+          <div class="comment-meta">
+            <strong>${c.author_name || 'Anonymous'}</strong>
+            <time>${new Date(c.created_at * 1000).toLocaleDateString()}</time>
+          </div>
+          <p>${c.content}</p>
+        </div>
+      `).join('')
+    : '<p class="no-comments">No comments yet. Be the first!</p>';
+
+  const html = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${post.title} - XAOSTECH Blog</title>
+  <meta name="description" content="${post.excerpt || post.title}">
+  <link rel="icon" type="image/png" href="/api/data/assets/XAOSTECH_LOGO.png">
+  <style>
+    :root { --primary: #f6821f; --bg: #0a0a0a; --text: #e0e0e0; --card-bg: #1a1a1a; --border: #333; }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; line-height: 1.7; }
+    .container { max-width: 800px; margin: 0 auto; padding: 2rem; }
+    .back { color: var(--primary); text-decoration: none; display: inline-block; margin-bottom: 2rem; }
+    .back:hover { text-decoration: underline; }
+    header { margin-bottom: 2rem; }
+    h1 { font-size: 2.5rem; margin-bottom: 1rem; line-height: 1.2; }
+    .meta { display: flex; align-items: center; gap: 1rem; color: #888; font-size: 0.95rem; flex-wrap: wrap; }
+    .author { display: flex; align-items: center; gap: 0.5rem; }
+    .author-avatar { width: 36px; height: 36px; border-radius: 50%; }
+    .featured-image { width: 100%; max-height: 400px; object-fit: cover; border-radius: 12px; margin: 2rem 0; }
+    article { font-size: 1.1rem; }
+    article h1, article h2, article h3 { margin: 2rem 0 1rem; color: var(--primary); }
+    article p { margin-bottom: 1.5rem; }
+    article a { color: var(--primary); }
+    article code { background: #222; padding: 0.2rem 0.4rem; border-radius: 4px; font-size: 0.9em; }
+    article pre { background: #111; padding: 1rem; border-radius: 8px; overflow-x: auto; margin: 1.5rem 0; }
+    article pre code { background: transparent; padding: 0; }
+    article ul, article ol { margin: 1rem 0 1.5rem 2rem; }
+    article li { margin-bottom: 0.5rem; }
+    article blockquote { border-left: 4px solid var(--primary); padding-left: 1rem; margin: 1.5rem 0; font-style: italic; opacity: 0.9; }
+    .edit-btn { display: inline-block; margin-top: 2rem; padding: 0.5rem 1rem; background: var(--card-bg); border: 1px solid var(--border); border-radius: 6px; color: var(--text); text-decoration: none; font-size: 0.9rem; }
+    .edit-btn:hover { border-color: var(--primary); }
+    .comments-section { margin-top: 4rem; padding-top: 2rem; border-top: 1px solid var(--border); }
+    .comments-section h3 { margin-bottom: 1.5rem; }
+    .comment { background: var(--card-bg); padding: 1rem; border-radius: 8px; margin-bottom: 1rem; }
+    .comment-meta { display: flex; justify-content: space-between; margin-bottom: 0.5rem; font-size: 0.9rem; color: #888; }
+    .no-comments { color: #666; font-style: italic; }
+    footer { text-align: center; margin-top: 4rem; padding-top: 2rem; border-top: 1px solid var(--border); opacity: 0.5; font-size: 0.85rem; }
+    footer a { color: var(--primary); }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <a href="/" class="back">← Back to Blog</a>
+    
+    <header>
+      <h1>${post.title}</h1>
+      <div class="meta">
+        <div class="author">
+          <img src="${post.author_avatar || '/api/data/assets/XAOSTECH_LOGO.png'}" alt="${post.author_name || 'Author'}" class="author-avatar">
+          <span>${post.author_name || 'Author'}</span>
+        </div>
+        <time>${publishDate}</time>
+      </div>
+    </header>
+    
+    ${post.featured_image_url ? `<img src="${post.featured_image_url}" alt="${post.title}" class="featured-image">` : ''}
+    
+    <article>
+      ${contentHtml}
+    </article>
+    
+    ${canEdit ? `<a href="/posts/${post.id}/edit" class="edit-btn">✏️ Edit Post</a>` : ''}
+    
+    <section class="comments-section">
+      <h3>💬 Comments</h3>
+      ${commentsHtml}
+    </section>
+  </div>
+  
+  <footer>
+    <a href="https://xaostech.io">← Back to XAOSTECH</a>
+  </footer>
+</body>
+</html>`;
+
+  return c.html(html);
 });
 
 // POST /posts - Create new post (admin or owner only)
