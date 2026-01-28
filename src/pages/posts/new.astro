@@ -1,9 +1,8 @@
 ---
 import Layout from '@/layouts/Layout.astro';
 
-// Get user and runtime from middleware
+// Get user from middleware
 const user = Astro.locals.user;
-const runtime = Astro.locals.runtime;
 
 // Redirect if not logged in or not admin/owner
 if (!user || (user.role !== 'owner' && user.role !== 'admin')) {
@@ -24,37 +23,30 @@ if (Astro.request.method === 'POST') {
 
   if (!title || !content) {
     error = 'Title and content are required.';
-  } else if (runtime?.env?.DB) {
+  } else {
     try {
-      // Generate slug from title
-      const baseSlug = title
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, '-')
-        .replace(/^-|-$/g, '');
+      // Create post via API proxy
+      const response = await fetch(new URL('/api/posts', Astro.url.origin), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Cookie': Astro.request.headers.get('Cookie') || ''
+        },
+        body: JSON.stringify({ title, content, excerpt, featured_image_url, status })
+      });
       
-      // Check for existing slugs and make unique
-      const existing = await runtime.env.DB.prepare(
-        'SELECT COUNT(*) as count FROM posts WHERE slug LIKE ?'
-      ).bind(`${baseSlug}%`).first<{ count: number }>();
-      
-      const slug = existing?.count ? `${baseSlug}-${existing.count + 1}` : baseSlug;
-      
-      const now = Math.floor(Date.now() / 1000);
-      const publishedAt = status === 'published' ? now : null;
-
-      await runtime.env.DB.prepare(`
-        INSERT INTO posts (title, slug, content, excerpt, featured_image_url, author_id, status, published_at, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).bind(title, slug, content, excerpt, featured_image_url, user.id, status, publishedAt, now, now).run();
-
-      // Redirect to the new post
-      return Astro.redirect(`/posts/${slug}?created=true`);
+      if (response.ok) {
+        const data = await response.json();
+        // Redirect to the new post
+        return Astro.redirect(`/posts/${data.slug}?created=true`);
+      } else {
+        const data = await response.json().catch(() => ({}));
+        error = data.error || 'Failed to create post.';
+      }
     } catch (e: any) {
       console.error('Failed to create post:', e);
       error = e.message || 'Failed to create post.';
     }
-  } else {
-    error = 'Database unavailable.';
   }
 }
 ---

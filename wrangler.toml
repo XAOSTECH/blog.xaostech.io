@@ -29,6 +29,11 @@ ADMIN_ROLE = "admin"
 FREE_TIER_LIMIT_GB = "5"
 CACHE_TTL = "3600"
 
+[[env.production.services]]
+binding = "API"
+service = "xaostech-api"
+environment = "production"
+
 [[env.production.kv_namespaces]]
 binding = "CACHE"
 id = "${KV_CACHE_ID}"

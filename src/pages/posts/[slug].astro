@@ -4,7 +4,6 @@ import { marked } from 'marked';
 
 // Get user and runtime from middleware
 const user = Astro.locals.user;
-const runtime = Astro.locals.runtime;
 
 // Get slug from URL
 const { slug } = Astro.params;
@@ -16,26 +15,20 @@ const wantsJson = Astro.request.headers.get('Accept')?.includes('application/jso
 let post: any = null;
 let comments: any[] = [];
 
-if (runtime?.env?.DB && slug) {
-  try {
-    post = await runtime.env.DB.prepare(`
-      SELECT p.*, u.username as author_name, u.avatar_url as author_avatar
-      FROM posts p
-      LEFT JOIN users u ON p.author_id = u.id
-      WHERE p.slug = ? AND p.status = 'published'
-    `).bind(slug).first();
-
-    if (post) {
-      const commentsResult = await runtime.env.DB.prepare(`
-        SELECT id, content, author_name, image_url, audio_url, created_at, status
-        FROM comments WHERE post_id = ? AND status = 'approved'
-        ORDER BY created_at DESC
-      `).bind(post.id).all();
-      comments = commentsResult.results || [];
+// Fetch post via API proxy
+try {
+  const response = await fetch(new URL(`/api/posts/${slug}`, Astro.url.origin), {
+    headers: {
+      'Cookie': Astro.request.headers.get('Cookie') || ''
     }
-  } catch (e) {
-    console.error('Failed to fetch post:', e);
+  });
+  if (response.ok) {
+    const data = await response.json();
+    post = data.post;
+    comments = data.comments || [];
   }
+} catch (e) {
+  console.error('Failed to fetch post:', e);
 }
 
 // Return JSON if requested
