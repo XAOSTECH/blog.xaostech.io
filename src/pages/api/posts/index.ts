@@ -1,17 +1,21 @@
 import type { APIRoute } from 'astro';
 
-// Helper to proxy requests to the central API
+// Helper to proxy requests to the central API using external fetch
 const proxyToAPI = async (locals: any, path: string, init?: RequestInit) => {
-  const api = locals.runtime?.env?.API;
-  if (!api) {
-    return new Response(JSON.stringify({ error: 'API service not configured' }), {
-      status: 503,
-      headers: { 'Content-Type': 'application/json' },
-    });
-  }
+  const env = locals.runtime?.env || {};
+  const clientId = env.API_ACCESS_CLIENT_ID;
+  const clientSecret = env.API_ACCESS_CLIENT_SECRET;
 
   try {
-    const resp = await api.fetch(`https://api.xaostech.io${path}`, init);
+    const url = `https://api.xaostech.io${path}`;
+    const headers = new Headers(init?.headers || {});
+
+    if (clientId && clientSecret) {
+      headers.set('CF-Access-Client-Id', clientId);
+      headers.set('CF-Access-Client-Secret', clientSecret);
+    }
+
+    const resp = await fetch(url, { ...init, headers });
     return resp;
   } catch (e: any) {
     console.error('API proxy error:', e);
