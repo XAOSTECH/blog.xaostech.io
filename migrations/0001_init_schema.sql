@@ -1,3 +1,19 @@
+-- Users table (must be created first - other tables reference users.id)
+CREATE TABLE IF NOT EXISTS users (
+  id TEXT PRIMARY KEY,
+  github_id TEXT UNIQUE,
+  username TEXT,
+  email TEXT,
+  avatar_url TEXT,
+  role TEXT DEFAULT 'user', -- user | admin | owner
+  created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+  updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+);
+
+CREATE INDEX IF NOT EXISTS idx_users_github_id ON users(github_id);
+CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
+
 -- Blog Posts Table
 CREATE TABLE IF NOT EXISTS posts (
   id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
