@@ -1,30 +1,26 @@
-import { defineMiddleware } from 'astro:middleware';
+import { defineMiddleware, sequence } from 'astro:middleware';
+import { applySecurityHeaders } from '../shared/types/security';
 
-export const onRequest = defineMiddleware(async (context, next) => {
+const sessionMiddleware = defineMiddleware(async (context, next) => {
   const { cookies, locals } = context;
-
-  // Skip session check for API routes and static assets
   const path = new URL(context.request.url).pathname;
+
   if (path.startsWith('/api/') || path.includes('.')) {
     return next();
   }
 
-  // Get runtime from Cloudflare
   const runtime = locals.runtime;
   if (!runtime?.env?.SESSIONS_KV) {
     locals.user = null;
     return next();
   }
 
-  // Parse session from cookie
   const sessionId = cookies.get('session_id')?.value;
-
   if (sessionId) {
     try {
       const sessionData = await runtime.env.SESSIONS_KV.get(sessionId);
       if (sessionData) {
         const session = JSON.parse(sessionData);
-        // Check session hasn't expired
         if (!session.expires || session.expires > Date.now()) {
           locals.user = {
             id: session.userId || session.id,
@@ -35,7 +31,6 @@ export const onRequest = defineMiddleware(async (context, next) => {
             avatar_url: session.avatar_url,
             github_id: session.github_id,
           };
-
           return next();
         }
       }
@@ -47,3 +42,10 @@ export const onRequest = defineMiddleware(async (context, next) => {
   locals.user = null;
   return next();
 });
+
+const securityMiddleware = defineMiddleware(async (_context, next) => {
+  const res = await next();
+  return applySecurityHeaders(res);
+});
+
+export const onRequest = sequence(sessionMiddleware, securityMiddleware);
