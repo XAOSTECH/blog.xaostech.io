@@ -1,5 +1,5 @@
 import { defineMiddleware, sequence } from 'astro:middleware';
-import { applySecurityHeaders } from '../shared/types/security';
+import { getSecurityHeaders } from '../shared/types/security';
 
 const sessionMiddleware = defineMiddleware(async (context, next) => {
   const { cookies, locals } = context;
@@ -45,7 +45,11 @@ const sessionMiddleware = defineMiddleware(async (context, next) => {
 
 const securityMiddleware = defineMiddleware(async (_context, next) => {
   const res = await next();
-  return applySecurityHeaders(res);
+  const sec = getSecurityHeaders();
+  for (const k of Object.keys(sec)) {
+    res.headers.set(k, sec[k]);
+  }
+  return res;
 });
 
 export const onRequest = sequence(sessionMiddleware, securityMiddleware);
