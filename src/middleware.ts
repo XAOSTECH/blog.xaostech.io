@@ -23,8 +23,8 @@ const sessionMiddleware = defineMiddleware(async (context, next) => {
         const session = JSON.parse(sessionData);
         if (!session.expires || session.expires > Date.now()) {
           locals.user = {
-            id: session.userId || session.id,
-            userId: session.userId || session.id,
+            id: session.user_id || session.userId || session.id,
+            userId: session.user_id || session.userId || session.id,
             email: session.email || '',
             username: session.username,
             role: session.role || 'user',
