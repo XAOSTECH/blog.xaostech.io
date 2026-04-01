@@ -1,7 +1,6 @@
 name = "xaostech-blog"
 compatibility_date = "2025-12-31"
 compatibility_flags = ["nodejs_compat"]
-main = "dist/_worker.js/index.js"
 send_metrics = false
 
 [observability]
@@ -17,7 +16,6 @@ invocation_logs = true
 [env.production]
 name = "xaostech-blog"
 compatibility_flags = ["nodejs_compat"]
-main = "dist/_worker.js/index.js"
 routes = [{ pattern = "blog.xaostech.io/*", zone_name = "xaostech.io" }]
 
 [env.production.assets]
