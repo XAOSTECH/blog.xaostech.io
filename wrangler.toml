@@ -15,12 +15,13 @@ invocation_logs = true
 
 [env.production]
 name = "xaostech-blog"
-main = "./dist/_worker.js/index.js"
+main = "./dist/server/entry.mjs"
 compatibility_flags = ["nodejs_compat"]
 routes = [{ pattern = "blog.xaostech.io/*", zone_name = "xaostech.io" }]
 
 [env.production.assets]
-directory = "./dist"
+directory = "./dist/client"
+binding = "ASSETS"
 
 [env.production.vars]
 MAX_FILE_SIZE = "52428800"
