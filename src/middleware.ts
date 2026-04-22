@@ -45,7 +45,8 @@ const sessionMiddleware = defineMiddleware(async (context, next) => {
 
 const securityMiddleware = defineMiddleware(async (_context, next) => {
   const res = await next();
-  const sec = getSecurityHeaders();
+  // skipCsp: Astro emits its own CSP via security.csp in astro.config.mjs.
+  const sec = getSecurityHeaders({ skipCsp: true });
   for (const k of Object.keys(sec)) {
     res.headers.set(k, sec[k]);
   }
