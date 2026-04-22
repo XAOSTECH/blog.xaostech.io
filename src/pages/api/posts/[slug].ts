@@ -1,8 +1,9 @@
 import type { APIRoute } from 'astro';
+import { env as cfEnv } from 'cloudflare:workers';
 
 // Helper to proxy requests to the central API
-const proxyToAPI = async (locals: any, path: string, init?: RequestInit) => {
-  const api = locals.runtime?.env?.API;
+const proxyToAPI = async (path: string, init?: RequestInit) => {
+  const api = (cfEnv as { API?: { fetch: typeof fetch } }).API;
   if (!api) {
     return new Response(JSON.stringify({ error: 'API service not configured' }), {
       status: 503,
@@ -24,7 +25,7 @@ const proxyToAPI = async (locals: any, path: string, init?: RequestInit) => {
 
 export const GET: APIRoute = async ({ params, locals }) => {
   const { slug } = params;
-  return proxyToAPI(locals, `/blog/posts/${slug}`);
+  return proxyToAPI(`/blog/posts/${slug}`);
 };
 
 export const PUT: APIRoute = async ({ params, request, locals }) => {
@@ -41,7 +42,7 @@ export const PUT: APIRoute = async ({ params, request, locals }) => {
   const body = await request.text();
   const cookies = request.headers.get('Cookie') || '';
 
-  return proxyToAPI(locals, `/blog/posts/${slug}`, {
+  return proxyToAPI(`/blog/posts/${slug}`, {
     method: 'PUT',
     headers: {
       'Content-Type': 'application/json',
@@ -65,7 +66,7 @@ export const DELETE: APIRoute = async ({ params, request, locals }) => {
 
   const cookies = request.headers.get('Cookie') || '';
 
-  return proxyToAPI(locals, `/blog/posts/${slug}`, {
+  return proxyToAPI(`/blog/posts/${slug}`, {
     method: 'DELETE',
     headers: {
       'Cookie': cookies,

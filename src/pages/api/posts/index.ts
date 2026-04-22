@@ -1,8 +1,9 @@
 import type { APIRoute } from 'astro';
+import { env as cfEnv } from 'cloudflare:workers';
 
 // Helper to proxy requests to the central API
-const proxyToAPI = async (locals: any, path: string, init?: RequestInit) => {
-  const api = locals.runtime?.env?.API;
+const proxyToAPI = async (path: string, init?: RequestInit) => {
+  const api = (cfEnv as { API?: { fetch: typeof fetch } }).API;
   if (!api) {
     return new Response(JSON.stringify({ error: 'API service not configured' }), {
       status: 503,
@@ -22,9 +23,9 @@ const proxyToAPI = async (locals: any, path: string, init?: RequestInit) => {
   }
 };
 
-export const GET: APIRoute = async ({ url, locals }) => {
+export const GET: APIRoute = async ({ url }) => {
   const limit = url.searchParams.get('limit') || '50';
-  return proxyToAPI(locals, `/blog/posts?limit=${limit}`);
+  return proxyToAPI(`/blog/posts?limit=${limit}`);
 };
 
 export const POST: APIRoute = async ({ request, locals }) => {
@@ -43,7 +44,7 @@ export const POST: APIRoute = async ({ request, locals }) => {
   // Get session token to forward auth
   const cookies = request.headers.get('Cookie') || '';
 
-  return proxyToAPI(locals, '/blog/posts', {
+  return proxyToAPI('/blog/posts', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

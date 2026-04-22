@@ -1,4 +1,5 @@
 import { defineMiddleware, sequence } from 'astro:middleware';
+import { env as cfEnv } from 'cloudflare:workers';
 import { getSecurityHeaders } from '../shared/types/security';
 
 const sessionMiddleware = defineMiddleware(async (context, next) => {
@@ -9,8 +10,8 @@ const sessionMiddleware = defineMiddleware(async (context, next) => {
     return next();
   }
 
-  const runtime = locals.runtime;
-  if (!runtime?.env?.SESSIONS_KV) {
+  const env = cfEnv as unknown as Env;
+  if (!env?.SESSIONS_KV) {
     locals.user = null;
     return next();
   }
@@ -18,7 +19,7 @@ const sessionMiddleware = defineMiddleware(async (context, next) => {
   const sessionId = cookies.get('session_id')?.value;
   if (sessionId) {
     try {
-      const sessionData = await runtime.env.SESSIONS_KV.get(sessionId);
+      const sessionData = await env.SESSIONS_KV.get(sessionId);
       if (sessionData) {
         const session = JSON.parse(sessionData);
         if (!session.expires || session.expires > Date.now()) {
