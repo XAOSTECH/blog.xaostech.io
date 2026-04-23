@@ -8,6 +8,9 @@ export default defineConfig({
     platformProxy: {
       enabled: true,
     },
+    sessionKVBindingName: 'SESSIONS_KV',
+    prerenderEnvironment: 'node',
+    imageService: 'compile',
     routes: {
       extend: {
         include: [{ pattern: '/api/*' }],
