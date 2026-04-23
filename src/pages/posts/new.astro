@@ -26,7 +26,7 @@ if (Astro.request.method === 'POST') {
   } else {
     try {
       // Create post via API proxy
-      const response = await fetch(new URL('/api/posts', Astro.url.origin), {
+      const response = await fetch(new URL('/api/blog/posts', Astro.url.origin), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
