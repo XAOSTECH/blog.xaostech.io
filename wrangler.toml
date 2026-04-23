@@ -15,7 +15,7 @@ invocation_logs = true
 
 [env.production]
 name = "xaostech-blog"
-main = "./dist/server/entry.mjs"
+main = "@astrojs/cloudflare/entrypoints/server"
 compatibility_flags = ["nodejs_compat", "disable_nodejs_process_v2"]
 routes = [{ pattern = "blog.xaostech.io/*", zone_name = "xaostech.io" }]
 
